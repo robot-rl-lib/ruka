@@ -8,23 +8,30 @@ import gym
 import collections
 from enum import Enum
 
+import cv2
+
 from manipulation_main.common import transformations
 from . import actuator, sensor
 from .simulation.simulation import World 
-from .rewards import ShapedCustomTargetReward as ShapedCustomReward
+from .rewards import Reward
 from .curriculum import WorkspaceCurriculum
+from .configs import EnvironmentConfig, Observe
 from .simulation.model import Model
-from .configs import EnvironmentConfig
+
 
 
 class RobotEnv(World):
     class Status(Enum):
         RUNNING = 0
         SUCCESS = 1
-        FAIL = 2
+        PICKED_WRONG = 2
         TIME_LIMIT = 3
+        CLEARING_OBJECT_PICKED = 4
 
-    def __init__(self, config: EnvironmentConfig, validate):
+    def __init__(
+        self, 
+        config: EnvironmentConfig, 
+        validate: bool):
         super().__init__(config, validate)
 
         self.config = config
@@ -34,15 +41,13 @@ class RobotEnv(World):
         self.action_space = self._actuator.action_space
 
         # Reward.
-        self._reward_fn = ShapedCustomReward(config['reward'], self)
+        self._reward_fn = Reward(config['reward'], self)
 
         # Assign the sensors (depth + actuator).
-        self._camera = sensor.RGBDSensor(config['sensor'], self, full_obs=False)
-        self._sensors = [self._camera, self._actuator]
-        shape = self._camera.state_space.shape
-        self.observation_space = \
-            gym.spaces.Box(low=0, high=255, shape=(shape[0], shape[1], 3))
-
+        self._camera = sensor.OnGripperCamera(
+            config.on_gripper_camera_config,
+            self,
+        )            
         # Curriculum.
         self._initial_height = 0.3
         self._init_ori = transformations.quaternion_from_euler(np.pi, 0., 0.)
@@ -51,27 +56,29 @@ class RobotEnv(World):
         self.history = self.curriculum._history
         self.sr_mean = 0.
         self._last_rgb = None
-        self._target_object = None
+        self.target_object = None
 
-        self._use_target_object = config.use_target_object
-        self._last_pos = {}
+        self._observation_types = config.observation_types
 
-        # Initial reset.
         self.reset()
 
+        self.observation_space = \
+            gym.spaces.Box(low=0, high=1, shape=(self.obs.shape))
+
     def reset(self):
-        self.reset_sim() #world + scene reset
+        self.reset_sim()
         self._actuator.reset()
         self._camera.reset()
+        self._reward_fn.reset()
 
-        self._target_object = self._scene.pickable_objects[0]
-        self._reward_fn.reset(self._target_object)
+        self.target_object = self._scene.pickable_objects[-1]
+        self.pickable_objects = self._scene.pickable_objects
+        self._reward_fn.reset()
+
 
         self.episode_step = 0
-        self.episode_rewards = np.zeros(self.config.time_horizon)
         self.status = RobotEnv.Status.RUNNING
         self.obs = self._observe()
-
         return self.obs
 
     def step(self, action):
@@ -89,10 +96,11 @@ class RobotEnv(World):
 
         new_obs = self._observe()
 
-        reward, self.status = self._reward_fn(self.obs, action, new_obs)
-        self.episode_rewards[self.episode_step] = reward
+        reward, self.status = self._reward_fn()
 
-        if self.status != RobotEnv.Status.RUNNING:
+        if (self.status != RobotEnv.Status.RUNNING) and \
+            (self.status != RobotEnv.Status.CLEARING_OBJECT_PICKED) and \
+                (self.status != RobotEnv.Status.PICKED_WRONG):
             done = True
         elif self.episode_step == self.config.time_horizon - 1:
             done, self.status = True, RobotEnv.Status.TIME_LIMIT
@@ -111,16 +119,34 @@ class RobotEnv(World):
 
     def _observe(self):
         rgb, depth, mask = self._camera.get_state()
-        if self._use_target_object:
+        observation_list = []
+        rgb_for_video = rgb
+
+        if Observe.RGB in self._observation_types:
+            observation_list.append(rgb/255)
+
+        if Observe.GRAY in self._observation_types:
+            gray = cv2.cvtColor(rgb, cv2.COLOR_BGR2GRAY)/255
+            observation_list.append(gray[..., None])
+
+        if Observe.DEPTH in self._observation_types:
+            observation_list.append(depth[..., None])
+            
+        if Observe.TARGET_SEGMENTATION in self._observation_types:
             mask = (mask==self.target_object.model_id).astype(float)
-        mask = mask/(max(mask.max(), 1e-6))
-        self._last_rgb = np.concatenate(
-            [rgb, (mask[..., None] * np.ones((1,1,3)) * 255).astype(np.uint8)],
-            axis=1)
-        sensor_pad = np.zeros(self._camera.state_space.shape[:2])
-        sensor_pad[0][0] = self._actuator.get_state()
-        obs_stacked = np.dstack((depth, mask, sensor_pad))
-        self._last_pos = {'pose': self.get_pose(), 'target': self._target_object.getBase()}
+            observation_list.append(mask[..., None])
+
+            rgb_for_video = np.concatenate(
+                [rgb_for_video, (mask[..., None] * np.ones((1,1,3)) * 255).astype(np.uint8)],
+                axis=1)
+
+        sensor_pad = np.zeros(rgb.shape[:2])
+        sensor_pad[0, 0] = self._actuator.get_state()
+        observation_list.append(sensor_pad[..., None])
+
+        obs_stacked = np.concatenate(observation_list, axis=-1)
+        self._last_rgb = rgb_for_video
+
         return obs_stacked
 
     def get_pose(self):
@@ -129,25 +155,12 @@ class RobotEnv(World):
     def get_image(self):
         if self._last_rgb is None:
             rgb, depth, mask = self._camera.get_state()
-            rgb = np.concatenate(
-            [rgb, (np.zeros_like(mask)[..., None]*np.ones((1,1,3)) * 255).astype(np.uint8)],
-            axis=1)
+            if Observe.TARGET_SEGMENTATION in self._observation_types:
+                rgb = np.concatenate(
+                    [rgb, (np.zeros_like(mask)[..., None]*np.ones((1,1,3)) * 255).astype(np.uint8)],
+                    axis=1)
         else:
             rgb = self._last_rgb
         return rgb
 
-    # -------------
 
-    def is_simplified(self):
-        return False
-
-    def __getattr__(self, attr):
-        if attr == 'depth_obs':
-            return True
-        if attr == 'full_obs':
-            return False
-        raise AttributeError()
-
-    @property
-    def target_object(self) -> Model:
-        return self._target_object

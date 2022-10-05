@@ -1,5 +1,5 @@
 from collections import OrderedDict, namedtuple
-from typing import Tuple, Iterable, Any
+from typing import Tuple, Iterable, Any, Union, Optional
 import abc
 
 import numpy as np
@@ -10,6 +10,7 @@ from torch import nn as nn
 import ruka.pytorch_util as ptu
 from ruka.training.eval_util import create_stats_ordered_dict
 from .util import add_prefix, np_to_pytorch_batch
+from ruka.util.scheduler import Scheduler
 
 SACLosses = namedtuple(
     'SACLosses',
@@ -83,6 +84,7 @@ class SACTrainer(TorchTrainer):
 
             use_automatic_entropy_tuning=True,
             target_entropy=None,
+            action_loss: Optional[Union[float, Scheduler]] = None,
     ):
         super().__init__()
         self.env = env
@@ -92,6 +94,9 @@ class SACTrainer(TorchTrainer):
         self.critic_coef = critic_coef
         self.soft_target_tau = soft_target_tau
         self.target_update_period = target_update_period
+        self.action_loss = action_loss
+        if self.action_loss is not None and not isinstance(self.action_loss, Scheduler):
+            self.action_loss = Scheduler({0: self.action_loss})
 
         self.use_automatic_entropy_tuning = use_automatic_entropy_tuning
         if self.use_automatic_entropy_tuning:
@@ -191,6 +196,9 @@ class SACTrainer(TorchTrainer):
 
         q_new_actions = torch.min(*self.qfs(obs, new_obs_actions))
         policy_loss = (alpha*log_pi - q_new_actions).mean()
+        if self.action_loss is not None:
+            action_loss = self.action_loss.value(self._n_train_steps_total) * torch.mean(new_obs_actions**2)
+            policy_loss += action_loss
 
         self.policy_optimizer.zero_grad()
         policy_loss.backward()
@@ -205,6 +213,9 @@ class SACTrainer(TorchTrainer):
             eval_statistics['Policy Loss'] = np.mean(ptu.get_numpy(
                 policy_loss
             ))
+            if self.action_loss is not None:
+                eval_statistics['Action Loss'] = np.mean(ptu.get_numpy(action_loss))
+            
             eval_statistics.update(create_stats_ordered_dict(
                 'Q1 Predictions',
                 ptu.get_numpy(q1_pred),

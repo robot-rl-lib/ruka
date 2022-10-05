@@ -1,4 +1,5 @@
-
+import numpy as np
+from email import policy
 from .rollouts import rollout, vec_rollout
 from collections import deque, OrderedDict
 from stable_baselines3.common.vec_env import VecEnv
@@ -108,27 +109,43 @@ class VecTransitionCollector:
             policy,
             continue_last_path: bool = True,
             rollout_fn=vec_rollout,
+            zero_action_steps = 0
     ):
         self._env = env
         self._policy = policy
         self._rollout_fn = rollout_fn
         self._last_obs = None
         self._continue_last_path = continue_last_path
+        self._zero_action_steps = zero_action_steps
+        self._num_collected_steps = 0
 
     def collect_transitions(
             self,
             num_transitions,
     ):
         
+        policy = self._policy
+        if self._num_collected_steps < self._zero_action_steps:
+            class ZeroPolicy:
+                def __init__(self, env):
+                    self._action_shape = env.action_space.shape
+                def get_actions(self, *args, **kwargs):
+                    return np.zeros(self._action_shape, dtype=np.float32)[None]
+                def reset(self):
+                    pass
+            print('Zero policy step')
+            policy = ZeroPolicy(self._env)
+
         transitions = vec_rollout(
             vec_env=self._env,
-            agent=self._policy,
+            agent=policy,
             num_steps=num_transitions//self._env.num_envs,
             last_obs=self._last_obs
         )
         if self._continue_last_path:
             self._last_obs = transitions['next_observations'][-1]
 
+        self._num_collected_steps += num_transitions
         return transitions
 
     def get_epoch_paths(self):
