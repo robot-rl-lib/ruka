@@ -1,5 +1,4 @@
 import os.path
-import warnings
 
 from ruka_os import distributed_fs as dfs, in_cloud, DFS_CWD
 

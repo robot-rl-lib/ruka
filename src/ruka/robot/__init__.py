@@ -1,60 +1,105 @@
 import abc
-from typing import Tuple
+from typing import List, Tuple
 
 import numpy as np
 from math import sin, cos, pi
 
 
 class RobotError(Exception):
-    def __init__(self, message: str):
-        super().__init__(message)
+    pass
 
 
-class ArmError(RobotError):
-    def __init__(self, message: str):
-        super().__init__(message)
-
-
-class GripperError(RobotError):
-    def __init__(self, message: str):
-        super().__init__(message)
-
-
-class Arm(abc.ABC):
+class Robot(abc.ABC):
     @abc.abstractmethod
     def reset(self):
-        """
-        Clear errors and prepare to move
-        """
-        raise NotImplementedError
+        pass
 
     @abc.abstractmethod
     def disable(self):
-        """
-        Disable arm
-        """
-        raise NotImplementedError
+        pass
 
+    def isa(self, type):
+        return isinstance(self, type)
+
+
+class Camera(abc.ABC):
+    @abc.abstractmethod
+    def start(self):
+        """
+        Start frames capturing pipeline
+        """
+        pass
+
+    @abc.abstractmethod
+    def stop(self):
+        """
+        Stop frames capturing pipeline
+        """
+        pass
+
+    @abc.abstractmethod
+    def capture(self) -> np.ndarray:
+        """
+        Capture single multichannel frame
+        """
+        pass
+
+
+class CameraError(RobotError):
+    pass
+
+
+class Arm(abc.ABC):
     @property
     @abc.abstractmethod
     def speed(self) -> float:
         """
-        Move speed in mm/s
+        Current tool center point cartesian speed in mm/s
         """
-        raise NotImplementedError
+        pass
 
-    @speed.setter
+    @property
     @abc.abstractmethod
-    def speed(self, speed: float):
+    def position(self) -> Tuple[float, float, float, float, float, float]:
         """
-        Set move speed
+        Current tool center point cartesian position (x, y, z, roll, pitch, yaw)
 
-        :param speed: move speed in mm/s
+        Cartesian position is in mm, rotation is in degrees.
         """
-        raise NotImplementedError
+        pass
 
+    @property
     @abc.abstractmethod
-    def move(self, x: float, y: float, z: float, roll: float, pitch: float, yaw: float):
+    def angles(self) -> List[float]:
+        """
+        Current arm joints' angles in degrees
+        """
+        pass
+
+
+class ArmError(RobotError):
+    pass
+
+
+class ArmVelocityController(Arm, abc.ABC):
+    @abc.abstractmethod
+    def set_velocity(self, x: float, y: float, z: float, roll: float, pitch: float, yaw: float):
+        """
+        Set tool center point cartesian velocity
+
+        :param x: cartesian velocity along X axis in mm/s
+        :param y: cartesian velocity along Y axis in mm/s
+        :param z: cartesian velocity along Z axis in mm/s
+        :param roll: rotation velocity around X axis in degrees/s
+        :param pitch: rotation velocity around Y axis in degrees/s
+        :param yaw: rotation velocity around Z axis in degrees/s
+        """
+        pass
+
+
+class ArmPositionController(Arm, abc.ABC):
+    @abc.abstractmethod
+    def set_position(self, x: float, y: float, z: float, roll: float, pitch: float, yaw: float):
         """
         Perform tool center point linear motion to desired position
 
@@ -67,34 +112,23 @@ class Arm(abc.ABC):
         :param pitch: rotation around Y axis in degrees
         :param yaw: rotation around Z axis in degrees
         """
-        raise NotImplementedError
-
-    @property
-    @abc.abstractmethod
-    def position(self) -> Tuple[float, float, float, float, float, float]:
-        """
-        Current tool center point cartesian position (x, y, z, roll, pitch, yaw)
-
-        Cartesian position is in mm, rotation is in degrees.
-        """
-        raise NotImplementedError
+        pass
 
 
-class RestrictedArm(Arm):
-    def __init__(self, arm: Arm):
-        self._arm = arm
-        self._xmax = float("inf")
-        self._xmin = float("-inf")
-        self._ymax = float("inf")
-        self._ymin = float("-inf")
-        self._zmax = float("inf")
-        self._zmin = float("-inf")
-        self._bb_xmax = 0
-        self._bb_xmin = 0
-        self._bb_ymax = 0
-        self._bb_ymin = 0
-        self._bb_zmax = 0
-        self._bb_zmin = 0
+class RestrictedPositionMixin:
+    def __init__(self):
+        self.__xmax = float("inf")
+        self.__xmin = float("-inf")
+        self.__ymax = float("inf")
+        self.__ymin = float("-inf")
+        self.__zmax = float("inf")
+        self.__zmin = float("-inf")
+        self.__bb_xmax = 0
+        self.__bb_xmin = 0
+        self.__bb_ymax = 0
+        self.__bb_ymin = 0
+        self.__bb_zmax = 0
+        self.__bb_zmin = 0
 
     @property
     def boundaries(self) -> Tuple[float, float, float, float, float, float]:
@@ -141,24 +175,6 @@ class RestrictedArm(Arm):
         if zmin is not Ellipsis:
             self._bb_zmin = zmin
 
-    def reset(self):
-        self._arm.reset()
-
-    def disable(self):
-        self._arm.disable()
-
-    @property
-    def speed(self) -> float:
-        return self._arm.speed
-
-    @speed.setter
-    def speed(self, speed: float):
-        self._arm.speed = speed
-
-    @property
-    def position(self) -> Tuple[float, float, float, float, float, float]:
-        return self._arm.position
-
     def _check_boundaries(self, x: float, y: float, z: float, roll: float, pitch: float, yaw: float):
         roll = pi * roll / 180
         pitch = pi * pitch / 180
@@ -204,81 +220,30 @@ class RestrictedArm(Arm):
                 return False
         return True
 
-    def move(self, x: float, y: float, z: float, roll: float, pitch: float, yaw: float):
+    def set_position(self, x: float, y: float, z: float, roll: float, pitch: float, yaw: float):
         if not self._check_boundaries(x, y, z, roll, pitch, yaw):
             raise ArmError("Target position violates workspace boundaries")
-        self._arm.move(x, y, z, roll, pitch, yaw)
+        super().set_position(x, y, z, roll, pitch, yaw)
 
 
 class Gripper(abc.ABC):
     @property
     @abc.abstractmethod
-    def speed(self) -> int:
-        """
-        Grip speed in mm/s
-        """
-        raise NotImplementedError
-
-    @speed.setter
-    @abc.abstractmethod
-    def speed(self, speed: int):
-        """
-        Set grip speed
-
-        :param speed: grip speed in mm/s
-        """
-        raise NotImplementedError
-
-    @property
-    @abc.abstractmethod
-    def force(self) -> float:
-        """
-        Grip force
-        """
-        raise NotImplementedError
-
-    @force.setter
-    @abc.abstractmethod
-    def force(self, force: float):
-        """
-        Set grip force
-        """
-        raise NotImplementedError
-
-    @property
-    @abc.abstractmethod
-    def position(self) -> int:
+    def gripper_position(self) -> int:
         """
         Current gripper position in mm
         """
-        raise NotImplementedError
+        pass
 
     @abc.abstractmethod
-    def set_position(self, position: int):
+    def set_gripper_position(self, position: int):
         """
         Set gripper position
 
         :param position: gripper position in mm
         """
-        raise NotImplementedError
+        pass
 
 
-class Robot(object):
-    def __init__(self, arm: Arm, gripper: Gripper):
-        self._arm = arm
-        self._gripper = gripper
-
-    @property
-    def arm(self) -> Arm:
-        return self._arm
-
-    @property
-    def gripper(self) -> Gripper:
-        return self._gripper
-
-    def reset(self):
-        self.arm.reset()
-
-    def disable(self):
-        self.arm.disable()
-
+class GripperError(RobotError):
+    pass

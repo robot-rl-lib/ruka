@@ -11,8 +11,11 @@ class ResidualWrapper(gym.Wrapper):
         self._vec_env = None
         self._last_obs = None
 
-    def step(self, action):            
-        base_action = self.policy.get_actions(self._last_obs)
+    def step(self, action):     
+        if len(action.shape) == 1:
+            base_action = self.policy.get_action(self._last_obs)
+        else:
+            base_action = self.policy.get_actions(self._last_obs)
         action = np.clip(-1,1, action + base_action)
         self._last_obs, rew, done, info = self.env.step(action)
         return self._last_obs, rew, done, info

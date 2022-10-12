@@ -10,6 +10,7 @@ from enum import Enum
 
 import cv2
 
+from ruka.observation import Observation
 from manipulation_main.common import transformations
 from . import actuator, sensor
 from .simulation.simulation import World
@@ -60,12 +61,9 @@ class RobotEnv(World):
 
         self._observation_types = config.observation_types
 
-        self._last_pos = {}
-
         self.reset()
 
-        self.observation_space = \
-            gym.spaces.Box(low=0, high=1, shape=(self.obs.shape))
+        self.observation_space = self.obs.get_space()
 
     def reset(self):
         self.reset_sim()
@@ -101,8 +99,7 @@ class RobotEnv(World):
         reward, self.status = self._reward_fn()
 
         if (self.status != RobotEnv.Status.RUNNING) and \
-            (self.status != RobotEnv.Status.CLEARING_OBJECT_PICKED) and \
-                (self.status != RobotEnv.Status.PICKED_WRONG):
+            (self.status != RobotEnv.Status.CLEARING_OBJECT_PICKED):
             done = True
         elif self.episode_step == self.config.time_horizon - 1:
             done, self.status = True, RobotEnv.Status.TIME_LIMIT
@@ -121,22 +118,22 @@ class RobotEnv(World):
 
     def _observe(self):
         rgb, depth, mask = self._camera.get_state()
-        observation_list = []
+        observation = Observation()
         rgb_for_video = rgb
 
         if Observe.RGB in self._observation_types:
-            observation_list.append(rgb/255)
+            observation['rgb'] = rgb / 255
 
         if Observe.GRAY in self._observation_types:
-            gray = cv2.cvtColor(rgb, cv2.COLOR_BGR2GRAY)/255
-            observation_list.append(gray[..., None])
+            gray = cv2.cvtColor(rgb, cv2.COLOR_BGR2GRAY) / 255
+            observation['gray'] = gray[..., None]
 
         if Observe.DEPTH in self._observation_types:
-            observation_list.append(depth[..., None])
+            observation['depth'] = depth[..., None]
 
         if Observe.TARGET_SEGMENTATION in self._observation_types:
             mask = (mask==self.target_object.model_id).astype(float)
-            observation_list.append(mask[..., None])
+            observation['mask'] = mask[..., None]
 
             rgb_for_video = np.concatenate(
                 [rgb_for_video, (mask[..., None] * np.ones((1,1,3)) * 255).astype(np.uint8)],
@@ -144,14 +141,11 @@ class RobotEnv(World):
 
         sensor_pad = np.zeros(rgb.shape[:2])
         sensor_pad[0, 0] = self._actuator.get_state()
-        observation_list.append(sensor_pad[..., None])
+        observation['sensor_pad'] = sensor_pad[..., None]
 
-        obs_stacked = np.concatenate(observation_list, axis=-1)
         self._last_rgb = rgb_for_video
 
-        self._last_pos = {'pose': self.get_pose(), 'target': self.target_object.getBase()}
-
-        return obs_stacked
+        return observation
 
     def get_pose(self):
         return self._actuator._model.get_pose()

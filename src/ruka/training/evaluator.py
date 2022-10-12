@@ -6,6 +6,7 @@ import cv2
 from ruka.util import distributed_fs as dfs
 import numpy as np
 import ruka.util.tensorboard as tb
+from ruka.observation import Observation
 
 class Evaluator:
     def __init__(
@@ -26,8 +27,8 @@ class Evaluator:
         self._closes = []
 
     def collect_transitions(
-        self, 
-        num_transitions: int, 
+        self,
+        num_transitions: int,
         epoch: int = None,
         save_video: Optional[bool] = None):
 
@@ -44,27 +45,28 @@ class Evaluator:
         path_rewards = []
         path_actions = []
         path_infos = []
-        
+
         self._paths = []
 
         paths_frames = []
         frames = []
 
         obs = self._env.reset()
+        if isinstance(obs, dict):
+            obs = Observation(obs)
 
         nclose = 0
         prev_gripper_command = -1
         for _ in range(num_transitions):
-            
-
-
             action = self._policy.get_action(self._preprocess_fn(obs))
             obs, reward, done, info = self._env.step(action)
+            if isinstance(obs, dict):
+                obs = Observation(obs)
 
             if action[4]>0 and prev_gripper_command < 0:
                 nclose += (action[4]>0)
             prev_gripper_command = action[4]
-            
+
             rewards.append(reward)
             actions.append(action)
             infos.append({})
@@ -72,7 +74,7 @@ class Evaluator:
             path_rewards.append(reward)
             path_actions.append(action)
             path_infos.append({})
-            
+
             if self._video_prefix and save_video:
                 frames.append(self._env.get_image())
 
@@ -84,13 +86,15 @@ class Evaluator:
                 ))
                 paths_frames.extend(frames)
                 obs = self._env.reset()
+                if isinstance(obs, dict):
+                    obs = Observation(obs)
 
                 self._closes.append(nclose)
                 nclose = 0
                 path_rewards = []
                 path_actions = []
                 path_infos = []
-        
+
 
         if self._video_prefix and save_video:
             video_path = f"{self._video_prefix}_{epoch}.avi"
@@ -115,14 +119,13 @@ class Evaluator:
     def get_diagnostics(self):
 
         return {
-            "success_rate": self._env.sr_mean, 
+            "success_rate": self._env.sr_mean,
             "mean_path_len": np.mean([len(x['actions']) for x in self._paths]) if self._paths else -1,
             "mean_gripper_closes": np.mean(self._closes) if self._closes else -1
             }
 
     def get_snapshot(self):
         return {}
-        
-        
 
-        
+
+

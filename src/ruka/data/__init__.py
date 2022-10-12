@@ -12,7 +12,7 @@ def get_data(path: str) -> str:
     return os.path.join(HERE, path)
 
 
-def get_pybullet_data(path: str):
+def get_pybullet_data(path: str) -> str:
     path = os.path.normpath(path)
     assert not os.path.isabs(path)
     assert not path.startswith('..')

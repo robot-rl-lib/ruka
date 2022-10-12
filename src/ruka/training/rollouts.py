@@ -2,6 +2,7 @@ import numpy as np
 import copy
 from stable_baselines3.common.vec_env import VecEnv
 from stable_baselines3.common.vec_env.dummy_vec_env import DummyVecEnv
+from ruka.observation import Observation
 
 def rollout(
         env,
@@ -107,12 +108,17 @@ def vec_rollout(
     if last_obs is None:
         agent.reset()
         o = vec_env.reset()
+        if isinstance(o, dict):
+            o = Observation(o)
     else:
         o = last_obs
 
     for _ in range(num_steps):
-        a = agent.get_actions(o, **get_action_kwargs)
+        a = agent.get_actions(o.to_pytorch() if isinstance(o, Observation) else o, **get_action_kwargs)
         next_o, r, d, env_info = vec_env.step(copy.deepcopy(a))
+        if isinstance(next_o, dict):
+            next_o = Observation(next_o)
+
         observations.append(o)
         rewards.append(r)
         terminals.append(d)
@@ -123,12 +129,12 @@ def vec_rollout(
     actions = np.array(actions)
     if len(actions.shape) == 1:
         actions = np.expand_dims(actions, 1)
-    observations = np.array(observations)
-    next_observations = np.array(next_observations)
+    observations = Observation.stack(observations) if isinstance(observations[0], Observation) else np.array(observations)
+    next_observations = Observation.stack(next_observations) if isinstance(next_observations[0], Observation) else np.array(next_observations)
     rewards = np.array(rewards)
     if len(rewards.shape) == 1:
         rewards = rewards.reshape(-1, 1)
-    
+
     return dict(
         observations=observations,
         actions=actions,

@@ -10,8 +10,9 @@ from gym.spaces import Box, Discrete
 
 from stable_baselines3.common.vec_env import VecNormalize
 import itertools
+from ruka.observation import Observation
 
-Array = Any 
+Array = Any
 
 def get_dim(space):
     if isinstance(space, Box):
@@ -67,25 +68,21 @@ class ReplayBuffer(object, metaclass=abc.ABCMeta):
         :param path: Dict like one outputted by rlkit.samplers.util.rollout
         """
         for i, (
-                obs,
                 action,
                 reward,
-                next_obs,
                 terminal,
                 env_info
         ) in enumerate(zip(
-            path["observations"],
             path["actions"],
             path["rewards"],
-            path["next_observations"],
             path["terminals"],
             path["env_infos"],
         )):
             self.add_sample(
-                observation=obs,
+                observation=path["observations"].select_by_index(i) if isinstance(path["observations"], Observation) else path["observations"][i],
                 action=action,
                 reward=reward,
-                next_observation=next_obs,
+                next_observation=path["next_observations"].select_by_index(i) if isinstance(path["next_observations"], Observation) else path["next_observations"][i],
                 terminal=terminal,
                 env_info=env_info,
             )
@@ -116,25 +113,38 @@ class ReplayBuffer(object, metaclass=abc.ABCMeta):
 
 
 class SimpleReplayBuffer(ReplayBuffer):
-
     def __init__(
         self,
         max_replay_buffer_size,
-        observation_dim,
+        observation_space,
         action_dim,
         env_info_sizes,
         replace = True,
+        dict_like = False
     ):
-        # if isinstance(observation_dim, int):
-        #     self._observation_dim = (observation_dim,)
+        # if isinstance(observation_space, int):
+        #     self._observation_space = (observation_space,)
 
-        self._observation_dim = observation_dim
+        self._dict_like = dict_like
+        self._observation_space = observation_space
         self._action_dim = action_dim
         self._max_replay_buffer_size = max_replay_buffer_size
-        self._observations = np.zeros((max_replay_buffer_size,) + observation_dim)
 
-        self._next_obs = np.zeros((max_replay_buffer_size,) + observation_dim)
+        if dict_like:
+            def make_observation_template(observation_space, buffer_size):
+                result = Observation()
+                for key, value in observation_space.items():
+                    result[key] = np.zeros((buffer_size,) + value.shape)
+                return result
+
+            self._observations = make_observation_template(self._observation_space, max_replay_buffer_size)
+            self._next_observations = make_observation_template(self._observation_space, max_replay_buffer_size)
+        else:
+            self._observations = np.zeros((max_replay_buffer_size,) + observation_space.shape)
+            self._next_observations = np.zeros((max_replay_buffer_size,) + observation_space.shape)
+
         self._actions = np.zeros((max_replay_buffer_size, action_dim))
+
         # Make everything a 2D np array to make it easier for other code to
         # reason about the shape of the data
         self._rewards = np.zeros((max_replay_buffer_size, 1))
@@ -154,11 +164,21 @@ class SimpleReplayBuffer(ReplayBuffer):
 
     def add_sample(self, observation, action, reward, next_observation,
                    terminal, env_info, **kwargs):
-        self._observations[self._top] = observation
         self._actions[self._top] = action
         self._rewards[self._top] = reward
         self._terminals[self._top] = terminal
-        self._next_obs[self._top] = next_observation
+
+        if self._dict_like:
+            def replace_observation(observations, index, value):
+                assert len(value) == 1
+                for k, v in value.items():
+                    observations[k][index] = v
+
+            replace_observation(self._observations, self._top, observation)
+            replace_observation(self._next_observations, self._top, next_observation)
+        else:
+            self._observations[self._top] = observation
+            self._next_observations[self._top] = next_observation
 
         for key in self._env_info_keys:
             self._env_infos[key][self._top] = env_info[key]
@@ -177,11 +197,11 @@ class SimpleReplayBuffer(ReplayBuffer):
         if not self._replace and self._size < batch_size:
             warnings.warn('Replace was set to false, but is temporarily set to true because batch size is larger than current size of replay.')
         batch = dict(
-            observations=self._observations[indices],
+            observations=self._observations.select_by_index(indices) if self._dict_like else self._observations[indices],
             actions=self._actions[indices],
             rewards=self._rewards[indices],
             terminals=self._terminals[indices],
-            next_observations=self._next_obs[indices],
+            next_observations=self._next_observations.select_by_index(indices) if self._dict_like else self._next_observations[indices],
         )
         for key in self._env_info_keys:
             assert key not in batch.keys()
@@ -212,7 +232,7 @@ class SimpleReplayBuffer(ReplayBuffer):
         return {}
         return {
             "observations": self._observations,
-            "next_obs": self._next_obs,
+            "next_obs": self._next_observations,
             "actions": self._actions,
             "rewards": self._rewards,
             "terminals": self._terminals,
@@ -221,7 +241,7 @@ class SimpleReplayBuffer(ReplayBuffer):
 
     def load_from_snapshot(self, snapshot):
         self._observations = snapshot["observations"]
-        self._next_obs = snapshot["next_obs"]
+        self._next_observations = snapshot["next_obs"]
         self._actions = snapshot["actions"]
         self._rewards = snapshot["rewards"]
         self._terminals = snapshot["terminals"]
@@ -233,14 +253,14 @@ class EnvReplayBuffer(SimpleReplayBuffer):
             self,
             max_replay_buffer_size,
             env,
-            env_info_sizes=None
+            env_info_sizes=None,
+            dict_like=False
     ):
         """
         :param max_replay_buffer_size:
         :param env:
         """
         self.env = env
-        self._ob_space = env.observation_space
         self._action_space = env.action_space
 
         if env_info_sizes is None:
@@ -251,10 +271,10 @@ class EnvReplayBuffer(SimpleReplayBuffer):
 
         super().__init__(
             max_replay_buffer_size=max_replay_buffer_size,
-            # observation_dim=get_dim(self._ob_space),
-            observation_dim=self._ob_space.shape,
+            observation_space=env.observation_space,
             action_dim=get_dim(self._action_space),
-            env_info_sizes=env_info_sizes
+            env_info_sizes=env_info_sizes,
+            dict_like=dict_like,
         )
 
     def add_sample(self, observation, action, reward, terminal,
@@ -285,7 +305,6 @@ class NormReplayBuffer(SimpleReplayBuffer):
         :param env:
         """
         self.env = env
-        self._ob_space = env.observation_space
         self._action_space = env.action_space
 
         if env_info_sizes is None:
@@ -296,12 +315,12 @@ class NormReplayBuffer(SimpleReplayBuffer):
 
         super().__init__(
             max_replay_buffer_size=max_replay_buffer_size,
-            observation_dim=self._ob_space.shape,
+            observation_space=env.observation_space,
             action_dim=get_dim(self._action_space),
             env_info_sizes=env_info_sizes
         )
 
-    def add_sample(self, observation, action, reward, 
+    def add_sample(self, observation, action, reward,
                     next_observation, terminal, env_info, **kwargs):
         observation = self.env.unnormalize_obs(observation)
         reward = self.env.unnormalize_reward(reward)
@@ -323,9 +342,6 @@ class NormReplayBuffer(SimpleReplayBuffer):
         batch["rewards"] = self.env.normalize_reward(batch["rewards"])
         batch["next_observations"] = self.env.normalize_obs(batch["next_observations"])
         return batch
-        
-        
-        
 
 
 class VecEnvReplayBuffer(SimpleReplayBuffer):
@@ -335,13 +351,13 @@ class VecEnvReplayBuffer(SimpleReplayBuffer):
             env: VecNormalize,
             env_info_sizes=None,
             handle_tl: str = False,
+            dict_like=False,
     ):
         """
         :param max_replay_buffer_size:
         :param env:
         """
         self.env = env
-        self._ob_space = env.observation_space
         self._action_space = env.action_space
 
         if env_info_sizes is None:
@@ -353,12 +369,13 @@ class VecEnvReplayBuffer(SimpleReplayBuffer):
 
         super().__init__(
             max_replay_buffer_size=max_replay_buffer_size,
-            observation_dim=self._ob_space.shape,
+            observation_space=env.observation_space,
             action_dim=get_dim(self._action_space),
-            env_info_sizes=env_info_sizes
+            env_info_sizes=env_info_sizes,
+            dict_like=dict_like,
         )
 
-    def add_sample(self, observation, action, reward, 
+    def add_sample(self, observation, action, reward,
                     next_observation, terminal, env_info, **kwargs):
         if self._handle_tl and env_info.get('is_time_limit', False) and terminal:
             return
@@ -386,20 +403,25 @@ class VecEnvReplayBuffer(SimpleReplayBuffer):
         batch["rewards"] = self.env.normalize_reward(batch["rewards"])
         batch["next_observations"] = self.env.normalize_obs(batch["next_observations"])
         return batch
-    
-    def add_vec_transitions(self, transitions):
-        n_transitions = transitions["observations"].shape[0] * transitions["observations"].shape[1]
 
-        transitions["observations"] = transitions["observations"].reshape((n_transitions,) + transitions["observations"].shape[2:])
+    def add_vec_transitions(self, transitions):
+
+
+        if self._dict_like:
+            n_transitions = len(transitions["observations"])
+        else:
+            n_transitions = transitions["observations"].shape[0] * transitions["observations"].shape[1]
+            transitions["observations"] = transitions["observations"].reshape((n_transitions,) + transitions["observations"].shape[2:])
+            transitions["next_observations"] = transitions["next_observations"].reshape((n_transitions,) + transitions["next_observations"].shape[2:])
+
         transitions["actions"] = transitions["actions"].reshape((n_transitions,) + transitions["actions"].shape[2:])
         transitions["rewards"] = transitions["rewards"].reshape((n_transitions,) + transitions["rewards"].shape[2:])
-        transitions["next_observations"] = transitions["next_observations"].reshape((n_transitions,) + transitions["next_observations"].shape[2:])
         transitions["terminals"] = transitions["terminals"].reshape((n_transitions,) + transitions["terminals"].shape[2:])
-        
+
         transitions["env_infos"] = list(itertools.chain(*transitions["env_infos"]))
 
         self.add_path(transitions)
-        
+
 
 class RadVecEnvReplayBuffer(VecEnvReplayBuffer):
     def __init__(self, crop_size: int, *args, num_direct_features: Optional[int] = None, **kwargs):
@@ -413,22 +435,40 @@ class RadVecEnvReplayBuffer(VecEnvReplayBuffer):
         batch["next_observations"] = self.crop_augment(batch["next_observations"])
         return batch
 
-    def crop_augment(self, imgs):
-        n, c, h, w = imgs.shape
-        crop_max = h - self._crop_size + 1
-        w1 = np.random.randint(0, crop_max, n)
-        h1 = np.random.randint(0, crop_max, n)
+    def crop_augment(self, observation):
+        if self._dict_like:
+            cropped = Observation()
 
-        
-        cropped = np.empty((n, c, self._crop_size, self._crop_size), dtype=imgs.dtype)
+            n, _, h, w = observation['depth'].shape
+            crop_max = h - self._crop_size + 1
+            w1 = np.random.randint(0, crop_max, n)
+            h1 = np.random.randint(0, crop_max, n)
 
-        for i, (img, w11, h11) in enumerate(zip(imgs, w1, h1)):
-            cropped[i] = img[:, h11:h11 + self._crop_size, w11:w11 + self._crop_size]
+            for k, v in observation.items():
+                cropped[k] = np.zeros((n, v.shape[1], self._crop_size, self._crop_size), dtype=v.dtype)
+                if k == 'sensor_pad':
+                    cropped[k] = v[:, :, 0:self._crop_size, 0:self._crop_size]
+                    continue
 
-        if self._num_direct_features is not None:
-            directs = imgs[:, -1, :, :].reshape((n, -1))
-            directs = directs[:, :self._crop_size * self._crop_size]
-            directs = directs.reshape((n, self._crop_size, self._crop_size))
-            cropped[:, -1, :, :] = directs
+                for i, (w11, h11) in enumerate(zip(w1, h1)):
+                    cropped[k][i] = v[i, :, h11:(h11 + self._crop_size), w11:(w11 + self._crop_size)]
 
-        return cropped
+            return cropped
+        else:
+            n, c, h, w = observation.shape
+            crop_max = h - self._crop_size + 1
+            w1 = np.random.randint(0, crop_max, n)
+            h1 = np.random.randint(0, crop_max, n)
+
+            cropped = np.empty((n, c, self._crop_size, self._crop_size), dtype=observation.dtype)
+
+            for i, (img, w11, h11) in enumerate(zip(observation, w1, h1)):
+                cropped[i] = img[:, h11:h11 + self._crop_size, w11:w11 + self._crop_size]
+
+            if self._num_direct_features is not None:
+                directs = observation[:, -1, :, :].reshape((n, -1))
+                directs = directs[:, :self._crop_size * self._crop_size]
+                directs = directs.reshape((n, self._crop_size, self._crop_size))
+                cropped[:, -1, :, :] = directs
+
+            return cropped

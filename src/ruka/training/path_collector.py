@@ -3,7 +3,7 @@ from email import policy
 from .rollouts import rollout, vec_rollout
 from collections import deque, OrderedDict
 from stable_baselines3.common.vec_env import VecEnv
-
+from ruka.observation import Observation
 
 
 class MdpPathCollector:
@@ -123,7 +123,7 @@ class VecTransitionCollector:
             self,
             num_transitions,
     ):
-        
+
         policy = self._policy
         if self._num_collected_steps < self._zero_action_steps:
             class ZeroPolicy:
@@ -143,7 +143,7 @@ class VecTransitionCollector:
             last_obs=self._last_obs
         )
         if self._continue_last_path:
-            self._last_obs = transitions['next_observations'][-1]
+            self._last_obs = transitions['next_observations'].select_by_index(-1) if isinstance(transitions['next_observations'], Observation) else transitions['next_observations'][-1]
 
         self._num_collected_steps += num_transitions
         return transitions

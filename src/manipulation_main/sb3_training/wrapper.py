@@ -1,6 +1,27 @@
-import gym 
+import gym
 import numpy as np
 from gym.wrappers import TimeLimit
+
+class ImageToPyTorchDictLike(gym.ObservationWrapper):
+    """
+    Image shape to channels x weight x height
+    """
+
+    def __init__(self, env):
+        super(ImageToPyTorchDictLike, self).__init__(env)
+
+        space_dict = dict()
+        for key, space in env.observation_space.items():
+            space_dict[key] = gym.spaces.Box(low=0, high=1, shape=(space.shape[-1], space.shape[0], space.shape[1],))
+
+        self.observation_space = gym.spaces.Dict(space_dict)
+
+    def observation(self, observation):
+        result = dict()
+        for key, value in observation.items():
+            result[key] = np.transpose(value, axes=(2, 0, 1))[None]
+        return result
+
 
 class ImageToPyTorch(gym.ObservationWrapper):
     """
@@ -23,6 +44,7 @@ class ImageToPyTorch(gym.ObservationWrapper):
     def observation(self, observation):
         return np.transpose(observation, axes=(2, 0, 1))
         # return np.transpose(np.uint8(observation*255), axes=(2, 0, 1))
+
 
 class TimeFeatureWrapper(gym.Wrapper):
     """

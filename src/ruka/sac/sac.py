@@ -11,6 +11,7 @@ import ruka.pytorch_util as ptu
 from ruka.training.eval_util import create_stats_ordered_dict
 from .util import add_prefix, np_to_pytorch_batch
 from ruka.util.scheduler import Scheduler
+from ruka.observation import Observation
 
 SACLosses = namedtuple(
     'SACLosses',
@@ -142,9 +143,9 @@ class SACTrainer(TorchTrainer):
         """
         rewards = batch['rewards']
         terminals = batch['terminals']
-        obs = batch['observations']
+        obs = batch['observations'] if isinstance(batch['observations'], Observation) else batch['observations']
         actions = batch['actions']
-        next_obs = batch['next_observations']
+        next_obs = batch['next_observations'] if isinstance(batch['next_observations'], Observation) else batch['next_observations']
 
         """
         Sample new actions from states
@@ -215,7 +216,7 @@ class SACTrainer(TorchTrainer):
             ))
             if self.action_loss is not None:
                 eval_statistics['Action Loss'] = np.mean(ptu.get_numpy(action_loss))
-            
+
             eval_statistics.update(create_stats_ordered_dict(
                 'Q1 Predictions',
                 ptu.get_numpy(q1_pred),

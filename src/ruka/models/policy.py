@@ -7,6 +7,7 @@ import torch.nn as nn
 import torch
 from .distributions import Delta, TanhNormal, DistributionGenerator
 from .cnn_encoders import BaseFeaturesExtractor
+from ruka.observation import Observation
 
 LOG_SIG_MAX = 2
 LOG_SIG_MIN = -20
@@ -37,8 +38,8 @@ class TorchStochasticPolicy(
     DistributionGenerator,
     ExplorationPolicy, metaclass=abc.ABCMeta
 ):
-    def get_action(self, obs_np):
-        actions = self.get_actions(obs_np[None])
+    def get_action(self, obs):
+        actions = self.get_actions(obs.to_pytorch() if isinstance(obs, Observation) else obs[None])
         return actions[0, :]
 
     def get_actions(self, obs_np):
@@ -120,7 +121,7 @@ class EncoderTanhGaussianPolicy(TanhGaussianPolicy):
     def forward(self, obs):
         encoded_obs = self.encoder(obs)
         return super().forward(encoded_obs)
-    
+
 class SharedEncoderTanhGaussianPolicy(TanhGaussianPolicy):
     def __init__(self, encoder: BaseFeaturesExtractor, hidden_sizes, action_dim, std=None, init_w=0.001, **kwargs):
         super().__init__(hidden_sizes, encoder.features_dim, action_dim, std, init_w, **kwargs)
@@ -142,3 +143,46 @@ class MakeDeterministic(TorchStochasticPolicy):
         dist = self._action_distribution_generator.forward(*args, **kwargs)
         return Delta(dist.mle_estimate())
         
+
+class TorchDeterministicPolicy(
+    ExplorationPolicy, metaclass=abc.ABCMeta
+):
+    def get_action(self, obs_np):
+        actions = self.get_actions(obs_np[None])
+        return actions[0, :]
+
+    def get_actions(self, obs_np):
+        actions = self._get_actions_from_np(obs_np)
+        return elem_or_tuple_to_numpy(actions)
+
+    def _get_actions_from_np(self, *args, **kwargs):
+        torch_args = tuple(torch_ify(x) for x in args)
+        torch_kwargs = {k: torch_ify(v) for k, v in kwargs.items()}
+        actions = self(*torch_args, **torch_kwargs)
+        return actions
+
+class SimpeDeterministicPolicy(Mlp, TorchDeterministicPolicy):
+
+    def __init__(
+            self,
+            hidden_sizes,
+            obs_dim,
+            action_dim,
+            init_w=1e-3,
+            **kwargs
+    ):
+        super().__init__(
+            hidden_sizes,
+            input_size=obs_dim,
+            output_size=action_dim,
+            init_w=init_w,
+            **kwargs
+        )
+
+class EncoderSimpeDeterministicPolicy(SimpeDeterministicPolicy):
+    def __init__(self, encoder: BaseFeaturesExtractor, hidden_sizes, action_dim, init_w=0.001, **kwargs):
+        super().__init__(hidden_sizes, encoder.features_dim, action_dim, init_w, **kwargs)
+        self.encoder = encoder
+    def forward(self, obs):
+        encoded_obs = self.encoder(obs)
+        return super().forward(encoded_obs)

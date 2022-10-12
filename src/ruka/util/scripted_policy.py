@@ -89,7 +89,7 @@ class ScriptedPolicy:
         act[-1] = -1
         return act
         
-    def get_actions(self, _):
+    def get_action(self, _):
         rob_xyz = np.array(self._r._last_pos['pose'][0])
         tgt_xyz = np.array(self._r._last_pos['target'][0])
         
