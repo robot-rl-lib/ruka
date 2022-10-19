@@ -12,14 +12,20 @@ class ImageToPyTorchDictLike(gym.ObservationWrapper):
 
         space_dict = dict()
         for key, space in env.observation_space.items():
-            space_dict[key] = gym.spaces.Box(low=0, high=1, shape=(space.shape[-1], space.shape[0], space.shape[1],))
+            if len(space.shape) == 3:
+                space_dict[key] = gym.spaces.Box(low=0, high=1, shape=(space.shape[-1], space.shape[0], space.shape[1],))
+            else:
+                space_dict[key] = gym.spaces.Box(low=space.low, high=space.high, shape=space.shape)
 
         self.observation_space = gym.spaces.Dict(space_dict)
 
     def observation(self, observation):
         result = dict()
         for key, value in observation.items():
-            result[key] = np.transpose(value, axes=(2, 0, 1))[None]
+            if len(value.shape) == 3:
+                result[key] = np.transpose(value, axes=(2, 0, 1))[None]
+            else:
+                result[key] = value[None]
         return result
 
 

@@ -42,7 +42,7 @@ class BaseBCAlgorithm(object, metaclass=abc.ABCMeta):
         raise NotImplementedError('_train must implemented by inherited class')
 
     def _end_epoch(self, epoch):
-        
+
         if (epoch % self._snapshot_every) == 0:
             print(f"saving {epoch}.snapshot")
             snapshot = self._get_snapshot()
@@ -84,7 +84,7 @@ class BaseBCAlgorithm(object, metaclass=abc.ABCMeta):
         Trainer
         """
         logger.record_dict(self.trainer.get_diagnostics(), prefix='trainer/')
-        
+
         for k, v in self.trainer.get_diagnostics().items():
             tb.scalar('trainer/' + k, v)
         """
@@ -94,10 +94,10 @@ class BaseBCAlgorithm(object, metaclass=abc.ABCMeta):
             self.eval_data_collector.get_diagnostics(),
             prefix='evaluation/',
         )
-        
+
         for k, v in self.eval_data_collector.get_diagnostics().items():
             tb.scalar('evaluation/' + k, v)
-            
+
         eval_paths = self.eval_data_collector.get_epoch_paths()
         if eval_paths:
             if hasattr(self.eval_env, 'get_diagnostics'):
@@ -105,7 +105,7 @@ class BaseBCAlgorithm(object, metaclass=abc.ABCMeta):
                     self.eval_env.get_diagnostics(eval_paths),
                     prefix='evaluation/',
                 )
-            
+
             eval_paths_info = eval_util.get_generic_path_information(eval_paths)
 
             logger.record_dict(
@@ -115,12 +115,12 @@ class BaseBCAlgorithm(object, metaclass=abc.ABCMeta):
 
             for k, v in eval_paths_info.items():
                 tb.scalar('evaluation/' + k, v)
-                
+
         """
         Misc
         """
         logger.record_tabular('Epoch', epoch)
-        
+
         logger.dump_tabular(with_prefix=False, with_timestamp=False)
 
     @abc.abstractmethod
@@ -158,11 +158,11 @@ class BCAlgorithm(BaseBCAlgorithm):
         self.num_eval_steps_per_epoch = num_eval_steps_per_epoch
         self.num_trains_per_epoch = num_trains_per_epoch
 
-    def _train(self):            
+    def _train(self):
 
         for epoch in range(self._start_epoch, self.num_epochs):
-
-            self.eval_data_collector.collect_transitions(self.num_eval_steps_per_epoch)
+            if self.num_eval_steps_per_epoch is not None:
+                self.eval_data_collector.collect_transitions(self.num_eval_steps_per_epoch)
 
             self.training_mode(True)
 
@@ -173,10 +173,8 @@ class BCAlgorithm(BaseBCAlgorithm):
                 tb.step(self.trainer._num_train_steps)
 
             self.training_mode(False)
-                
-            
             self._end_epoch(epoch)
-                        
+
         tb.flush(wait=True)
 
     def to(self, device):

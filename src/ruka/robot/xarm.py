@@ -129,13 +129,13 @@ def with_xarm_error_handling(xarm: XArmAPI, min_timeout: int = 1, max_timeout: i
     for name, method in inspect.getmembers(xarm, inspect.isroutine):
         setattr(xarm, name, handle_xarm_errors(method))
     return xarm
-    
+
 
 class XArm(Robot, Arm, Gripper):
-    def __init__(self, ip: str, gripper_speed: int = 50, collision_senstivity: int = 3, max_reset_retries: int = 10, home: Optional[Tuple[float, float, float, float, float, float]] = None):
+    def __init__(self, ip: str, gripper_speed: int = 50, collision_sensitivity: int = 3, max_reset_retries: int = 10, home: Optional[Tuple[float, float, float, float, float, float]] = None):
         self._home = home
         self._gripper_speed = gripper_speed
-        self._collision_senstivity = collision_senstivity
+        self._collision_sensitivity = collision_sensitivity
         self._max_reset_retries = max_reset_retries
         self._api = with_xarm_error_handling(XArmAPI(ip))                # Handle errors
         self._api.clean_error()                                          # Clean all previous errors
@@ -143,7 +143,7 @@ class XArm(Robot, Arm, Gripper):
         self._api.clean_gripper_error()                                  # Clean all previous gripper errors
         self._api.set_allow_approx_motion(True)                          # Allow to avoid overspeed near some singularities using approximate solutions
         self._api.set_collision_rebound(False)                           # Disable rebound after collision
-        self._api.set_collision_sensitivity(self._collision_senstivity)  # Set collision sensitivity
+        self._api.set_collision_sensitivity(self._collision_sensitivity)  # Set collision sensitivity
         self._api.set_self_collision_detection(True)                     # Enable self collision detection
         self._api.set_collision_tool_model(1)                            # Set XArm Gripper collision tool model
         self._api.set_safe_level(4)                                      # Default safe level
@@ -173,13 +173,13 @@ class XArm(Robot, Arm, Gripper):
         return self._api.angles
 
     @property
-    def collision_senstivity(self) -> int:
-        return self._collision_senstivity
+    def collision_sensitivity(self) -> int:
+        return self._collision_sensitivity
 
-    @collision_senstivity.setter
-    def collision_senstivity(self, collision_senstivity: int):
-        self._collision_senstivity = collision_senstivity
-        self._api.set_collision_sensitivity(self._collision_senstivity)
+    @collision_sensitivity.setter
+    def collision_sensitivity(self, collision_sensitivity: int):
+        self._collision_sensitivity = collision_sensitivity
+        self._api.set_collision_sensitivity(self._collision_sensitivity)
 
     @property
     def gripper_speed(self) -> int:
@@ -206,9 +206,9 @@ class XArm(Robot, Arm, Gripper):
         self._api.reset(wait=True)
         if not self._home:
             return
+        self._api.set_collision_sensitivity(0)  # Disable collision detection
         self._api.set_mode(0)
         self._api.set_state(0)
-        self._api.set_collision_sensitivity(0)  # Disable collision detection
         retries = 0
         sleep = 0.1
         while True:
@@ -216,10 +216,14 @@ class XArm(Robot, Arm, Gripper):
             try:
                 x, y, z, roll, pitch, yaw = self._home
                 self._api.set_position(x=x, y=y, z=z, roll=roll, pitch=pitch, yaw=yaw, wait=True)
-                self._api.set_collision_sensitivity(self._collision_senstivity)
+
+                while np.sqrt(np.sum((np.array(self._home[:3]) - np.array(self.position[:3])) ** 2)) > 0.05:
+                    time.sleep(1)
+
+                self._api.set_collision_sensitivity(self._collision_sensitivity)
                 self._api.reset(wait=True)
                 return
-            except XArmCollisionError:
+            except XArmError:
                 if retries >= self._max_reset_retries:
                     raise
                 if retries % 5 == 0:

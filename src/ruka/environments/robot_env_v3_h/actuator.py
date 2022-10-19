@@ -12,9 +12,9 @@ class Actuator:
         self._config = config
 
         # Define action and state spaces
-        self._max_translation = config["robot"]["max_translation"] 
-        self._max_yaw_rotation = config["robot"]["max_yaw_rotation"] 
-        self._max_force = config["robot"]["max_force"]
+        self._max_translation = config['robot']['max_translation']
+        self._max_yaw_rotation = config['robot']['max_yaw_rotation']
+        self._max_force = config['robot']['max_force']
 
         # Simulator objects.
         self._model = None
@@ -23,15 +23,19 @@ class Actuator:
 
         # Last gripper action
         self._gripper_open = True
+        self.state_space = None
 
         ### Setup action space.
 
-        high = np.r_[[self._max_translation] * 3, self._max_yaw_rotation, 1.]
+        high = np.r_[[self._max_translation]
+                        * 3, self._max_yaw_rotation, 1.]
         self._action_scaler = MinMaxScaler((-1, 1))
         self._action_scaler.fit(np.vstack((-1. * high, high)))
         self.action_space = gym.spaces.Box(-1.,
                                         1., shape=(5,), dtype=np.float32)
-    
+        
+        self.state_space = gym.spaces.Box(0., 1., shape=(1,), dtype=np.float32) 
+
         self._action_wait = config['robot']['action_wait']
         self._gripper_wait = config['robot']['gripper_wait']
 
@@ -111,15 +115,15 @@ class Actuator:
 
     def _close_gripper(self):
         self._target_joint_pos = 0.05
-        self._left_finger.set_position(self._target_joint_pos, max_force=self._max_force)
-        self._right_finger.set_position(self._target_joint_pos, max_force=self._max_force)
+        self._left_finger.set_position(self._target_joint_pos)
+        self._right_finger.set_position(self._target_joint_pos)
 
         self._robot.run(self._gripper_wait)
 
     def _open_gripper(self):
         self._target_joint_pos = 0.0
-        self._left_finger.set_position(self._target_joint_pos, max_force=self._max_force)
-        self._right_finger.set_position(self._target_joint_pos, max_force=self._max_force)
+        self._left_finger.set_position(self._target_joint_pos)
+        self._right_finger.set_position(self._target_joint_pos)
 
         self._robot.run(self._gripper_wait)
 

@@ -142,13 +142,13 @@ class MakeDeterministic(TorchStochasticPolicy):
     def forward(self, *args, **kwargs):
         dist = self._action_distribution_generator.forward(*args, **kwargs)
         return Delta(dist.mle_estimate())
-        
+
 
 class TorchDeterministicPolicy(
     ExplorationPolicy, metaclass=abc.ABCMeta
 ):
-    def get_action(self, obs_np):
-        actions = self.get_actions(obs_np[None])
+    def get_action(self, obs):
+        actions = self.get_actions(obs.to_pytorch() if isinstance(obs, Observation) else obs[None])
         return actions[0, :]
 
     def get_actions(self, obs_np):
@@ -179,6 +179,7 @@ class SimpeDeterministicPolicy(Mlp, TorchDeterministicPolicy):
             **kwargs
         )
 
+
 class EncoderSimpeDeterministicPolicy(SimpeDeterministicPolicy):
     def __init__(self, encoder: BaseFeaturesExtractor, hidden_sizes, action_dim, init_w=0.001, **kwargs):
         super().__init__(hidden_sizes, encoder.features_dim, action_dim, init_w, **kwargs)
@@ -186,3 +187,31 @@ class EncoderSimpeDeterministicPolicy(SimpeDeterministicPolicy):
     def forward(self, obs):
         encoded_obs = self.encoder(obs)
         return super().forward(encoded_obs)
+
+
+class EncoderSimpeDeterministicPolicyHeuristic(EncoderSimpeDeterministicPolicy):
+    def __init__(self, encoder: BaseFeaturesExtractor, hidden_sizes, action_dim, init_w=0.001, heuristics=[], **kwargs):
+        super().__init__(encoder, hidden_sizes, action_dim, init_w, **kwargs)
+        self.encoder = encoder
+        self.apply_heuristics = False
+        self.heuristics = heuristics
+
+    def forward(self, obs):
+        action = super().forward(obs)
+
+        if self.apply_heuristics:
+            assert len(action.shape) == 2
+            assert action.shape[0] == 1, 'Applying heuristics is only supported for single action, not batch'
+            for h in self.heuristics:
+                action = h(action, obs)
+
+        return action
+
+        
+class ZeroPolicy:
+    def __init__(self, env):
+        self._action_shape = env.action_space.shape
+    def get_actions(self, *args, **kwargs):
+        return np.zeros(self._action_shape, dtype=np.float32)[None]
+    def reset(self):
+        pass

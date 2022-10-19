@@ -19,7 +19,7 @@ try:
     HAS_WANDB = True
 except:
     HAS_WANDB = False
-    
+
 
 from . import eval_util
 from .logger import logger
@@ -50,7 +50,6 @@ class BaseRLAlgorithm(object, metaclass=abc.ABCMeta):
             exploration_env: VecNormalize,
             evaluation_env: VecNormalize,
             exploration_data_collector: VecTransitionCollector,
-            # evaluation_data_collector: VecTransitionCollector,
             evaluation_data_collector: Evaluator,
             replay_buffer: VecEnvReplayBuffer,
             snapshot_every: int = 10,
@@ -77,7 +76,7 @@ class BaseRLAlgorithm(object, metaclass=abc.ABCMeta):
         raise NotImplementedError('_train must implemented by inherited class')
 
     def _end_epoch(self, epoch):
-        
+
         if (epoch % self._snapshot_every) == 0:
             print(f"saving {epoch}.snapshot")
             snapshot = self._get_snapshot()
@@ -89,7 +88,8 @@ class BaseRLAlgorithm(object, metaclass=abc.ABCMeta):
         self._log_stats(epoch)
 
         self.expl_data_collector.end_epoch(epoch)
-        self.eval_data_collector.end_epoch(epoch)
+        if self.eval_data_collector is not None:
+            self.eval_data_collector.end_epoch(epoch)
         self.replay_buffer.end_epoch(epoch)
         self.trainer.end_epoch(epoch)
 
@@ -102,8 +102,9 @@ class BaseRLAlgorithm(object, metaclass=abc.ABCMeta):
             snapshot['trainer/' + k] = v
         for k, v in self.expl_data_collector.get_snapshot().items():
             snapshot['exploration/' + k] = v
-        for k, v in self.eval_data_collector.get_snapshot().items():
-            snapshot['evaluation/' + k] = v
+        if self.eval_data_collector is not None:
+            for k, v in self.eval_data_collector.get_snapshot().items():
+                snapshot['evaluation/' + k] = v
         for k, v in self.replay_buffer.get_snapshot().items():
             snapshot['replay_buffer/' + k] = v
         return snapshot
@@ -129,7 +130,7 @@ class BaseRLAlgorithm(object, metaclass=abc.ABCMeta):
         logger.record_dict(self.trainer.get_diagnostics(), prefix='trainer/')
         if use_wandb:
             wandb.log({'trainer/' + k: v for k, v in self.trainer.get_diagnostics().items()}, step=epoch, commit=False)
-        
+
         for k, v in self.trainer.get_diagnostics().items():
             tb.scalar('trainer/' + k, v)
         """
@@ -139,6 +140,9 @@ class BaseRLAlgorithm(object, metaclass=abc.ABCMeta):
             self.expl_data_collector.get_diagnostics(),
             prefix='exploration/'
         )
+        for k, v in self.expl_data_collector.get_diagnostics().items():
+            tb.scalar('exploration/' + k, v)
+
         if use_wandb:
             wandb.log({'exploration/' + k: v for k, v in self.expl_data_collector.get_diagnostics().items()}, step=epoch, commit=False)
         expl_paths = self.expl_data_collector.get_epoch_paths()
@@ -159,38 +163,40 @@ class BaseRLAlgorithm(object, metaclass=abc.ABCMeta):
         """
         Evaluation
         """
-        logger.record_dict(
-            self.eval_data_collector.get_diagnostics(),
-            prefix='evaluation/',
-        )
-        if use_wandb:
-            wandb.log({'evaluation/' + k: v for k, v in self.eval_data_collector.get_diagnostics().items()}, step=epoch, commit=False)
-        
-        for k, v in self.eval_data_collector.get_diagnostics().items():
-            tb.scalar('evaluation/' + k, v)
-            
-        eval_paths = self.eval_data_collector.get_epoch_paths()
-        if eval_paths:
-            if hasattr(self.eval_env, 'get_diagnostics'):
-                logger.record_dict(
-                    self.eval_env.get_diagnostics(eval_paths),
-                    prefix='evaluation/',
-                )
-                if use_wandb:
-                    wandb.log({'evaluation/' + k: v for k, v in self.eval_env.get_diagnostics(eval_paths).items()}, step=epoch, commit=False)
-            
-            eval_paths_info = eval_util.get_generic_path_information(eval_paths)
 
+        if self.eval_data_collector is not None:
             logger.record_dict(
-                eval_paths_info,
-                prefix="evaluation/",
+                self.eval_data_collector.get_diagnostics(),
+                prefix='evaluation/',
             )
             if use_wandb:
-                wandb.log({'evaluation/' + k: v for k, v in eval_paths_info.items()}, step=epoch, commit=False)
+                wandb.log({'evaluation/' + k: v for k, v in self.eval_data_collector.get_diagnostics().items()}, step=epoch, commit=False)
 
-            for k, v in eval_paths_info.items():
+            for k, v in self.eval_data_collector.get_diagnostics().items():
                 tb.scalar('evaluation/' + k, v)
-                
+
+            eval_paths = self.eval_data_collector.get_epoch_paths()
+            if eval_paths:
+                if hasattr(self.eval_env, 'get_diagnostics'):
+                    logger.record_dict(
+                        self.eval_env.get_diagnostics(eval_paths),
+                        prefix='evaluation/',
+                    )
+                    if use_wandb:
+                        wandb.log({'evaluation/' + k: v for k, v in self.eval_env.get_diagnostics(eval_paths).items()}, step=epoch, commit=False)
+
+                eval_paths_info = eval_util.get_generic_path_information(eval_paths)
+
+                logger.record_dict(
+                    eval_paths_info,
+                    prefix="evaluation/",
+                )
+                if use_wandb:
+                    wandb.log({'evaluation/' + k: v for k, v in eval_paths_info.items()}, step=epoch, commit=False)
+
+                for k, v in eval_paths_info.items():
+                    tb.scalar('evaluation/' + k, v)
+
         """
         Misc
         """
@@ -269,39 +275,51 @@ class BatchRLAlgorithm(BaseRLAlgorithm, metaclass=abc.ABCMeta):
         for _ in range(self.warmup_steps):
             train_data = self.replay_buffer.random_batch(self.batch_size)
             self.trainer.train(train_data)
-            
+
         for epoch in range(self._start_epoch, self.num_epochs):
+            explr_data_collection_time = 0
             start_epoch_timestamp = time.time()
-            self.eval_data_collector.collect_transitions(self.num_eval_steps_per_epoch)
+            if self.eval_data_collector is not None:
+                self.eval_data_collector.collect_transitions(self.num_eval_steps_per_epoch)
             for _ in range(self.num_train_loops_per_epoch):
+                start_data_collections = time.time()
                 new_expl_paths = self.expl_data_collector.collect_transitions(self.num_expl_steps_per_train_loop)
+                explr_data_collection_time += time.time() - start_data_collections
+
                 self.replay_buffer.add_vec_transitions(new_expl_paths)
-                
+
                 self.training_mode(True)
                 for _ in range(self.num_trains_per_train_loop):
                     train_data = self.replay_buffer.random_batch(self.batch_size)
                     self.trainer.train(train_data)
 
                     tb.step(self.trainer._num_train_steps)
-                    tb.scalar("success_rate", self.expl_env.get_attr("sr_mean")[0])
+                    if hasattr(self.expl_env, "sr_mean"):
+                        tb.scalar("success_rate", self.expl_env.get_attr("sr_mean")[0])
 
                 self.training_mode(False)
 
             self.timings = {
                 'EPOCH_TIME': time.time() - start_epoch_timestamp,
                 "TOTAL_TIME": time.time() - start_train_timestamp,
-                "SUCCES RATE": self.expl_env.get_attr("sr_mean")[0],
-                "SUCCES RATE EVAL": self.eval_env.get_attr("sr_mean")[0],
-                "CURRICULUM LAMBDA": self.expl_env.get_attr("curriculum")[0]._lambda,
                 "FPS": self.num_expl_steps_per_train_loop*self.num_train_loops_per_epoch/\
-                    (time.time() - start_epoch_timestamp)
+                    (time.time() - start_epoch_timestamp),
+                "EXPL_TIME": explr_data_collection_time,
             }
-            
-            sync_envs_normalization(self.expl_env, self.eval_env)
+            if hasattr(self.eval_env, 'sr_mean'):
+                self.timings["SUCCES RATE EVAL"] = self.eval_env.get_attr("sr_mean")[0]
+            if self.eval_env is not None and hasattr(self.eval_env, 'curriculum'):
+                self.timings["CURRICULUM LAMBDA"] = self.expl_env.get_attr("curriculum")[0]._lambda
+            if hasattr(self.expl_env, 'sr_mean'):
+                self.timings["SUCCES RATE"] = self.expl_env.get_attr("sr_mean")[0]
+
+            if self.eval_env is not None:
+                sync_envs_normalization(self.expl_env, self.eval_env)
+
             self._end_epoch(epoch)
-            
+
         tb.flush(wait=True)
-            
+
 
 
 class TorchBatchRLAlgorithm(BatchRLAlgorithm):

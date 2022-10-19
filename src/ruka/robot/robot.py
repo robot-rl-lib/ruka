@@ -1,5 +1,5 @@
 
-from ast import Tuple
+from typing import Tuple
 from ruka.util.x3d import Vec3
 
 
@@ -67,6 +67,7 @@ class Robot:
         The exception is reset when robot is told to go to some mode: steady(),
         hold(), etc.
         """
+        raise NotImplementedError()
 
 
 # ---------------------------------------------------------------------- Arm --
@@ -159,6 +160,13 @@ class GripperInfo:
 
     @property
     def gripper_acc(self) -> float:
+        raise NotImplementedError()
+
+    @property
+    def gripper_pos_limits(self) -> Tuple[float, float]:
+        """
+        Return (low, high).
+        """
         raise NotImplementedError()
 
 

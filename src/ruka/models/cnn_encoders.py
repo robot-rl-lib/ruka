@@ -1,5 +1,4 @@
-
-from typing import Tuple
+from typing import Tuple, Dict
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 import torch.nn as nn
 import gym
@@ -85,6 +84,23 @@ class AugmentedNatureCNNDictLike(BaseFeaturesExtractor):
         other_features = self.flatten(observations['sensor_pad'])[:, :self.num_direct_features]
         return torch.cat([
             self.nature_cnn(torch.cat([observations['depth'], observations['mask']], axis=1)),
+            other_features,
+            ], axis=-1)
+
+
+class AugmentedNatureCNNDictLikeGray(BaseFeaturesExtractor):
+    def __init__(self, input_dims, num_direct_features, image_features_dim: int = 512):
+        features_dim = image_features_dim + num_direct_features
+        super().__init__(input_dims, features_dim)
+
+        self.num_direct_features = num_direct_features
+        self.nature_cnn = NatureCNN(input_dims, image_features_dim)
+        self.flatten = nn.Flatten()
+
+    def forward(self, observations) -> torch.Tensor:
+        other_features = self.flatten(observations['sensor_pad'])[:, :self.num_direct_features]
+        return torch.cat([
+            self.nature_cnn(torch.cat([observations['gray']], axis=1)),
             other_features,
             ], axis=-1)
 

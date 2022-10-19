@@ -4,6 +4,7 @@ from .rollouts import rollout, vec_rollout
 from collections import deque, OrderedDict
 from stable_baselines3.common.vec_env import VecEnv
 from ruka.observation import Observation
+from ruka.models.policy import ZeroPolicy
 
 
 class MdpPathCollector:
@@ -126,14 +127,7 @@ class VecTransitionCollector:
 
         policy = self._policy
         if self._num_collected_steps < self._zero_action_steps:
-            class ZeroPolicy:
-                def __init__(self, env):
-                    self._action_shape = env.action_space.shape
-                def get_actions(self, *args, **kwargs):
-                    return np.zeros(self._action_shape, dtype=np.float32)[None]
-                def reset(self):
-                    pass
-            print('Zero policy step')
+            print('Zero policy step', num_transitions)
             policy = ZeroPolicy(self._env)
 
         transitions = vec_rollout(

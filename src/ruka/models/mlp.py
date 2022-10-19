@@ -217,3 +217,14 @@ class ConcatEncoderMlp(ConcatMlp):
     def forward(self, observations, *inputs, **kwargs):
         encoded_observations = self._encoder(observations)
         return super().forward(encoded_observations, *inputs, **kwargs)
+
+
+class SliceEncoder(nn.Module):
+    """ Slice part of embeddings """
+    def __init__(self, _slice: slice):
+        super().__init__()
+        self._slice = _slice
+
+    def forward(self, x):
+        assert len(x.shape) == 2, x.shape
+        return x[:, self._slice]

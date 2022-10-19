@@ -4,6 +4,17 @@ import gym
 import copy
 import ruka.pytorch_util as ptu
 import torch
+import enum
+
+class Observe(enum.Enum):
+    DEPTH = 'depth'
+    RGB = 'rgb'
+    GRAY = 'gray'
+    TARGET_SEGMENTATION = "mask"
+    ROBOT_POS = "robot_pos"
+    GRIPPER = "gripper"
+    SENSOR_PAD = 'sensor_pad'
+
 
 class Observation(dict):
     def __init__(self, state: Dict[str, np.array] = {}):
@@ -28,15 +39,19 @@ class Observation(dict):
         return gym.spaces.Dict(space)
 
     def to_legacy_format(self):
-        if isinstance(self['depth'], np.ndarray):
-            return np.concatenate([self['depth'], self['mask'], self['sensor_pad']], axis=1)
+        if isinstance(self[Observe.DEPTH.value], np.ndarray):
+            return np.concatenate([self[Observe.DEPTH.value],
+                                   self[Observe.TARGET_SEGMENTATION.value],
+                                   self[Observe.SENSOR_PAD.value]], axis=1)
         else:
-            return torch.cat([self['depth'], self['mask'], self['sensor_pad']], axis=1)
+            return torch.cat([self[Observe.DEPTH.value],
+                              self[Observe.TARGET_SEGMENTATION.value],
+                              self[Observe.SENSOR_PAD.value]], axis=1)
 
-    def to_pytorch(self):
+    def to_pytorch(self, other_device=None):
         result = Observation()
         for k, v in self.items():
-            result[k] = ptu.from_numpy(v).float()
+            result[k] = ptu.from_numpy(v, other_device=other_device).float()
         return result
 
     @staticmethod

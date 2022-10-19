@@ -1,18 +1,60 @@
-import copy
+import enum
 import gym
 import numpy as np
 
-from typing import Tuple
+from typing import Tuple, Union
 
 from ruka.environments.common.controller import Controller
-from ruka.robot.robot import ArmInfo, ArmVelControlled, GripperInfo
-from ruka.util.x3d import Vec3, compose_matrix
+from ruka.robot.robot import ArmInfo, ArmPosControlled, ArmVelControlled, \
+    GripperPosControlled, Robot
+from ruka.util.x3d import Vec3, chain, compose_matrix_tool, \
+    compose_matrix_world, decompose_matrix_world
+
+
+# -------------------------------------------------------------------- Robot --
+
+
+class RobotAction(enum.Enum):
+    NOP = 0
+    STEADY = 1
+    HOLD = 2
+    RELAX = 3
+    PARK = 4
+    GO_HOME = 5
+
+
+class RobotController(Controller):
+    def __init__(self, robot: Robot):
+        self._robot = robot
+
+    @property
+    def action_space(self) -> gym.spaces.Space:
+        return gym.spaces.Discrete(6)
+
+    def reset(self):
+        self._robot.go_home()
+        self._robot.steady()
+
+    def act(self, action):
+        """
+        Has wait=True semantics.
+        """
+        if action == RobotAction.STEADY.value:
+            self._robot.steady()
+        if action == RobotAction.HOLD.value:
+            self._robot.hold()
+        if action == RobotAction.RELAX.value:
+            self._robot.relax()
+        if action == RobotAction.PARK.value:
+            self._robot.park()
+        if action == RobotAction.GO_HOME.value:
+            self._robot.go_home()
 
 
 # ---------------------------------------------------------------- Cartesian --
 
 
-class Cartesian(Controller):
+class CartesianController(Controller):
     @property
     def action_space(self) -> gym.spaces.Space:
         pos_low, pos_high = self.pos_limits
@@ -44,9 +86,10 @@ class Cartesian(Controller):
 
         min == max = 0 is a valid limit.
         """
+        raise NotImplementedError()
 
 
-class VelWorld(Cartesian):
+class VelWorld(CartesianController):
     """
     A controller, whose input is world-space velocity.
 
@@ -54,7 +97,7 @@ class VelWorld(Cartesian):
     """
 
 
-class PosWorld(Cartesian):
+class PosWorld(CartesianController):
     """
     A controller, whose input is world-space position.
 
@@ -62,7 +105,7 @@ class PosWorld(Cartesian):
     """
 
 
-class PosWorldWait(Cartesian):
+class PosWorldWait(CartesianController):
     """
     A controller, whose input is world-space position.
 
@@ -74,70 +117,92 @@ class PosWorldWait(Cartesian):
 # ------------------------------------------------------- Cartesian wrappers --
 
 
-class VelWorldOverArm(Cartesian):
+class VelWorldOverRobot(VelWorld, CartesianController):
     def __init__(self, arm: ArmVelControlled):
         self._arm = arm
 
+    def reset(self):
+        # Reset is performed through Robot, not through Arm, because reset is a
+        # system-level procedure. You cannot reset arm and gripper separately,
+        # they work together when performing the reset.
+        pass
+
     def act(self, action):
-        self._arm.check()
         self._arm.set_vel(action['xyz'], action['rpy'])
 
-    def
+    @property
+    def pos_limits(self) -> Tuple[Vec3, Vec3]:
+        return self._arm.pos_limits
+
+    @property
+    def angle_limits(self) -> Tuple[Vec3, Vec3]:
+        return self._arm.angle_limits
 
 
-class VelToolOverWorld(Cartesian):
+class VelToolOverWorld(CartesianController):
     """
     A contoller, whose input is tool-space velocity, implemented over the
     controller, whose input is world-space velocity.
 
     act() has semantics of "wait=False" and returns immediately.
     """
-    def __init__(self, c: VelWorld, tcp: TCPInfo):
+    def __init__(self, c: VelWorld, arm_info: ArmInfo):
         self._c = c
-        self._tcp = tcp
+        self._arm_info = arm_info
+
+    def reset(self):
+        self._c.reset()
 
     def act(self, action):
-        world_to_tool = compose_matrix(angles=self._tcp.rpy)
-        action = {'xyz': world_to_tool @ np.array(action['xyz'])}
-        yield from self._c.act(action)
+        xyz = action['xyz']
+        rpy = action['rpy']
+
+        # Normalize angles to be < 180 deg.
+        rpy_const = max(1, *np.abs(rpy))
+        rpy /= rpy_const
+
+        # Compute world-space velocity.
+        world_to_tool = compose_matrix_world(angles=self._arm_info.angles)
+        tool_velocity = compose_matrix_tool(pos=xyz, angles=rpy)
+        tool_to_world = np.linalg.inv(world_to_tool)
+        world_velocity = chain(world_to_tool, tool_velocity, tool_to_world)
+
+        # Act.
+        xyz, rpy = decompose_matrix_world(world_velocity)
+        self._c.act({'xyz': xyz, 'rpy': rpy * rpy_const})
+
+    @property
+    def pos_limits(self) -> Tuple[Vec3, Vec3]:
+        return self._c.pos_limits
+
+    @property
+    def angle_limits(self) -> Tuple[Vec3, Vec3]:
+        return self._c.angle_limits
 
 
-class PosWorldWaitOverPosWorld(XYZ):
-    """
-    A position controller, which waits until the position is reached,
-    implemented over the position controller which doesn't.
+class PosWorldOverArm(PosWorld, CartesianController):
+    def __init__(self, arm: ArmPosControlled):
+        self._arm = arm
 
-    If position is not reached, but velocity and acceleration are below
-    respective thresholds, the controller assumes that the robot is stuck and
-    acts as if the target position is reached.
-
-    act() has semantics of "wait=True" and returns only after the move is
-    completed.
-    """
-    def __init__(
-            self,
-            c: PosWorld,
-            tcp: TCPInfo,
-            pos_thr: float,
-            vel_thr: float,
-            acc_thr: float
-        ):
-        self._c = c
-        self._tcp = tcp
-        self._pos_thr = pos_thr
-        self._vel_thr = vel_thr
-        self._acc_thr = acc_thr
+    def reset(self):
+        # Reset is performed through Robot, not through Arm, because reset is a
+        # system-level procedure. You cannot reset arm and gripper separately,
+        # they work together when performing the reset.
+        pass
 
     def act(self, action):
-        target = np.array(action['xyz'])
-        yield from self._c.act(action)
-        yield lambda: (
-            np.linalg.norm(np.array(self._tcp.xyz) - target) < self._pos_thr or
-            (self._tcp.vel < self._vel_thr and self._tcp.acc < self._acc_thr)
-        )
+        self._arm.set_pos(action['xyz'], action['rpy'])
+
+    @property
+    def pos_limits(self) -> Tuple[Vec3, Vec3]:
+        return self._arm.pos_limits
+
+    @property
+    def angle_limits(self) -> Tuple[Vec3, Vec3]:
+        return self._arm.angle_limits
 
 
-class PosRelToolOverAbsWorld(XYZ):
+class PosRelToolOverAbsWorld(CartesianController):
     """
     A controller, whose input is delta to position, specified in tool space,
     implemented over the controller, whose input is absolute position,
@@ -147,95 +212,168 @@ class PosRelToolOverAbsWorld(XYZ):
     underlying controller
     """
 
-    def __init__(self, c: Union[PosWorld, PosWorldWait], tcp: TCPInfo):
+    def __init__(self, c: Union[PosWorld, PosWorldWait], arm_info: ArmInfo):
         self._c = c
-        self._tcp = tcp
+        self._arm_info = arm_info
+
+    def reset(self):
+        self._c.reset()
 
     def act(self, action):
-        world_to_tool = compose_matrix(
-            angles=self._tcp.rpy, translate=self._tcp.position)
-        action = {'xyz': self._tcp.xyz + world_to_tool @ np.array(action['xyz'])}
-        yield from self._c.act(action)
+        world_to_tool = compose_matrix_world(
+            pos=self._arm_info.pos, angles=self._arm_info.angles)
+        tool_to_target = compose_matrix_tool(
+            pos=action['xyz'], angles=action['rpy'])
+        world_to_target = chain(world_to_tool, tool_to_target)
+
+        pos, angles = decompose_matrix_world(world_to_target)
+        self._c.act({'xyz': pos, 'rpy': angles})
+
+    @property
+    def pos_limits(self) -> Tuple[Vec3, Vec3]:
+        return self._c.pos_limits
+
+    @property
+    def angle_limits(self) -> Tuple[Vec3, Vec3]:
+        return self._c.angle_limits
 
 
-class PosRelWorldOverAbsWorld(XYZ):
+class PosRelWorldOverAbsWorld(CartesianController):
     """
     A controller, whose input is delta to position, specified in world space,
     implemented over the controller, whose input is absolute position,
     specified in world space.
     """
 
-    def __init__(self, c: Union[PosWorld, PosWorldWaiting], tcp: TCPInfo):
+    def __init__(self, c: Union[PosWorld, PosWorldWait], arm_info: ArmInfo):
         self._c = c
-        self._tcp = tcp
+        self._arm_info = arm_info
+
+    def reset(self):
+        self._c.reset()
 
     def act(self, action):
-        action = {'xyz': self._tcp.xyz + np.array(action['xyz'])}
-        yield from self._c.act(action)
+        world_to_tool = compose_matrix_world(
+            pos=self._arm_info.pos, angles=self._arm_info.angles)
+        tool_to_target = compose_matrix_world(
+            pos=action['xyz'], angles=action['rpy'])
+        world_to_target = chain(world_to_tool, tool_to_target)
+
+        pos, angles = decompose_matrix_world(world_to_target)
+        self._c.act({'xyz': pos, 'rpy': angles})
+
+    @property
+    def pos_limits(self) -> Tuple[Vec3, Vec3]:
+        return self._c.pos_limits
+
+    @property
+    def angle_limits(self) -> Tuple[Vec3, Vec3]:
+        return self._c.angle_limits
 
 
 # ------------------------------------------------------------------ Gripper --
 
 
-class Gripper(Controller):
+class GripperController(Controller):
     @property
     def action_space(self) -> gym.spaces.Space:
         low, high = self.limits
-        return gym.spaces.Dict({'gripper': gym.spaces.Box(low, high)})
+        return gym.spaces.Box(low, high)
 
     @property
-    def limits(self) -> Tuple[float, float]:
+    def gripper_limits(self) -> Tuple[float, float]:
         """
         Return (low, high).
         """
         raise NotImplementedError()
 
 
-class GripperPos(Gripper):
+class GripperPos(GripperController):
     """
-    A controller, whose input is gripper position.
+    A controller, whose input is gripper target position.
+
+    act() has semantics of "wait=False" and returns immediately.
+    """
+
+
+class GripperPosWorldWait(GripperController):
+    """
+    A controller, whose input is gripper target position.
+
+    act() has semantics of "wait=True" and returns only after the move is
+    completed.
     """
 
 
-class GripperPosWaitOverVerbatim(Gripper):
-    """
-    A position controller, which waits until the position is reached,
-    implemented over the position controller which doesn't.
+# --------------------------------------------------------- Gripper wrappers --
 
-    If position is not reached, but velocity and acceleration are below
-    respective thresholds, the controller assumes that the robot is stuck and
-    acts as if the target position is reached.
-    """
 
-    def __init__(
-            self,
-            c: GripperPos,
-            gripper: GripperInfo,
-            pos_thr: float,
-            vel_thr: float,
-            acc_thr: float
-        ):
-        self._c = c
+class GripperPosOverRobot(GripperController):
+    def __init__(self, gripper: GripperPosControlled):
         self._gripper = gripper
 
+    def reset(self):
+        # Reset is performed through Robot, not through Gripper, because reset
+        # is a system-level procedure. You cannot reset arm and gripper
+        # separately, they work together when performing the reset.
+        pass
+
     def act(self, action):
-        target = action['gripper']
-        yield from self._c.act(action)
-        yield lambda: (
-            np.abs(self._gripper.pos - target) < self._pos_thr or
-            (
-                self._gripper.vel < self._vel_thr and
-                self._gripper.acc < self._acc_thr
-            )
-        )
+        self._gripper.set_gripper_pos(action)
+
+    @property
+    def gripper_limits(self) -> Tuple[float, float]:
+        return self._gripper.gripper_limits
 
 
 # -------------------------------------------------------------- Whole robot --
 
 
-class GripperAndMove(Controller):
-    pass
-
-
 class GripperOrMove(Controller):
-    pass
+    def __init__(
+            self,
+            robot_c: RobotController,
+            move_c: CartesianController,
+            gripper_c: GripperController,
+        ):
+        self._robot_c = robot_c
+        self._move_c = move_c
+        self._gripper_c = gripper_c
+        self._last_gripper_action = None
+
+    @property
+    def action_space(self) -> gym.spaces.Space:
+        return gym.spaces.Dict({
+            'robot': self._robot_c.action_space,
+            'move': self._move_c.action_space,
+            'gripper': self._move_c.action_space
+        })
+
+    def reset(self):
+        self._robot_c.reset()
+        self._move_c.reset()
+        self._gripper_c.reset()
+        self._last_gripper_action = None
+
+    def act(self, action):
+        if action['robot'] != RobotAction.NOP.value:
+            self._robot_c.act(action['robot'])
+            return
+
+        if action['gripper'] != self._last_gripper_action:
+            self._gripper_c.act(action['gripper'])
+            self._last_gripper_action = action['gripper']
+            return
+
+        self._move_c.act(action['move'])
+
+
+"""
+c = GripperOrMove(robot_c, move_c, gripper_c)
+c = ClippedNormOverVerbatim(c, {'move': {'xyz': True, 'rpy': True}}) # <--- limits or default or per-item
+c = SplitVec3(c, {'move': {'xyz': ['x', 'y', 'z'], 'rpy': ['roll', 'pitch', 'yaw']}})
+c = Defaults(c, {'robot': {'action': RobotAction.NOP.value}, 'move': {'pitch': 0, 'yaw': 0}})
+c = Restrict(c, {'move': {'x': (-100, 100), 'y': (-200, 200), 'z': (-300, 300)}})
+c = Scale(c, {'move': {'x': True, 'y': True, 'z': (-2, 2)}}, (-1, 1)) # <-- all boxes or selected
+c = ToContinuous(c, {'gripper': True}, [-1, 1]) # closest to which key?
+"""

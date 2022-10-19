@@ -1,5 +1,6 @@
 import inspect
 import logging
+from typing import Tuple
 import numpy as np
 import random
 import time
@@ -12,8 +13,8 @@ from xarm.x3.code import APIState
 from ruka.util.x3d import Vec3
 
 from .robot import \
-    ArmError, ArmInfo, ArmPosControlled, ArmVelControlled, Robot, \
-    GripperInfo, GripperPosControlled, not_moving
+    ArmError, ArmInfo, ArmPosControlled, ArmVelControlled, \
+    GripperInfo, GripperPosControlled
 
 logging.basicConfig()
 
@@ -47,7 +48,7 @@ class _XArm(ArmInfo, GripperInfo, GripperPosControlled):
         self._api.clean_gripper_error()                                   # Clean all previous gripper errors
         self._api.set_allow_approx_motion(True)                           # Allow to avoid overspeed near some singularities using approximate solutions
         self._api.set_collision_rebound(False)                            # Disable rebound after collision
-        self._api.set_collision_sensitivity(config.collision_senstivity)  # Set collision sensitivity
+        self._api.set_collision_sensitivity(config.collision_sensitivity)  # Set collision sensitivity
         self._api.set_self_collision_detection(True)                      # Enable self collision detection
         self._api.set_collision_tool_model(1)                             # Set XArm Gripper collision tool model
         self._api.set_safe_level(4)                                       # Default safe level
@@ -67,7 +68,8 @@ class _XArm(ArmInfo, GripperInfo, GripperPosControlled):
         self._accept_move_commands = True
 
     def hold(self):
-        raise NotImplementedError()
+        self._api.reset()
+        time.sleep(1)
 
     def relax(self):
         self._api.reset()
@@ -82,21 +84,19 @@ class _XArm(ArmInfo, GripperInfo, GripperPosControlled):
         self._accept_move_commands = False
 
     def go_home(self):
-        self._api.motion_enable(True)
-        self._api.reset()
-        self._api.set_mode(0)
-        self._api.set_state(0)
-        self._api.set_collision_sensitivity(0)  # Disable collision detection
         retries = 0
         sleep = 0.1
         while True:
-            self._reset()
+            self._api.reset(wait=True)
+            self._api.set_collision_sensitivity(0)  # Disable collision detection
+            self._api.set_mode(0)
+            self._api.set_state(0)
+            time.sleep(.5) # Arm needs to sleep for a sec
             try:
                 x, y, z = self._config.home_pos
                 roll, pitch, yaw = self._config.home_angles
                 self._api.set_position(x=x, y=y, z=z, roll=roll, pitch=pitch, yaw=yaw, wait=True)
-                self._api.set_collision_sensitivity(self._collision_senstivity)
-                self._api.reset()
+                self._api.set_collision_sensitivity(self._config.collision_sensitivity)
                 break
             except XArmCollisionError:
                 if retries >= self._max_reset_retries:
@@ -107,6 +107,7 @@ class _XArm(ArmInfo, GripperInfo, GripperPosControlled):
                 traceback.print_exc()
                 time.sleep(min(random.expovariate(1.0 / sleep), 0.5))
                 retries += 1
+
         self.hold()
 
     def check(self):
@@ -124,12 +125,16 @@ class _XArm(ArmInfo, GripperInfo, GripperPosControlled):
         return self._api.realtime_tcp_speed
 
     @property
-    def acc(self) -> float:
+    def angles(self) -> Vec3:
+        return list(self._api.position)[3:]
+
+    @property
+    def pos_limits(self) -> Tuple[Vec3, Vec3]:
         ...
 
     @property
-    def angles(self) -> Vec3:
-        return list(self._api.position)[3:]
+    def angle_limits(self) -> Tuple[Vec3, Vec3]:
+        ...
 
     # - GripperInfo - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
@@ -138,16 +143,12 @@ class _XArm(ArmInfo, GripperInfo, GripperPosControlled):
         return self._api.get_gripper_position()[1] / 10
 
     @property
-    def gripper_speed(self) -> float:
-        ...
-
-    @property
-    def gripper_acc(self) -> float:
-        ...
+    def gripper_pos_limits(self) -> Tuple[float, float]:
+        return (0., 79.)
 
     # - GripperPosControlled  - - - - - - - - - - - - - - - - - - - - - - - - -
 
-    def set_gripper_pos(self, pos: float):
+    def set_gripper_pos(self, pos: int):
         if not self._accept_move_commands:
             return
         self._api.set_gripper_position(pos * 10, auto_enable=True, wait=False)
@@ -163,22 +164,24 @@ class XArmPosControlled(_XArm, ArmPosControlled):
         self._api.set_state(0)  # Prepare to move
 
     def set_pos(self, pos: Vec3, angles: Vec3):
+        self.check()
         if not self._accept_move_commands:
             return
         self._api.set_position(
             x=pos[0], y=pos[1], z=pos[2],
             roll=angles[0], pitch=angles[1], yaw=angles[2],
-            speed=self._config.max_speed, is_radian=False, wait=False
+            speed=self._config.max_speed, is_radian=False, wait=True
         )
 
 
 class XArmVelControlled(_XArm, ArmVelControlled):
-    def reset(self):
+    def steady(self):
         super().steady()
         self._api.set_mode(5)   # Enable velocity control
         self._api.set_state(0)  # Prepare to move
 
     def set_vel(self, vel: Vec3, angular_vel: Vec3):
+        self.check()
         if not self._accept_move_commands:
             return
 

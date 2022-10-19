@@ -249,8 +249,8 @@ def FloatTensor(*args, torch_device=None, **kwargs):
     return torch.FloatTensor(*args, **kwargs, device=torch_device)
 
 
-def from_numpy(*args, **kwargs):
-    return torch.from_numpy(*args, **kwargs).float().to(device)
+def from_numpy(*args, other_device=None, **kwargs):
+    return torch.from_numpy(*args, **kwargs).float().to(other_device or device)
 
 
 def get_numpy(tensor):

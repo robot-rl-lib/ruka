@@ -445,9 +445,17 @@ class RadVecEnvReplayBuffer(VecEnvReplayBuffer):
             h1 = np.random.randint(0, crop_max, n)
 
             for k, v in observation.items():
+                if len(v.shape) != 4: # (batch, ch, h, w)
+                    cropped[k] = v
+                    continue
+
                 cropped[k] = np.zeros((n, v.shape[1], self._crop_size, self._crop_size), dtype=v.dtype)
                 if k == 'sensor_pad':
                     cropped[k] = v[:, :, 0:self._crop_size, 0:self._crop_size]
+                    continue
+
+                if k == 'track':
+                    cropped[k] = v
                     continue
 
                 for i, (w11, h11) in enumerate(zip(w1, h1)):

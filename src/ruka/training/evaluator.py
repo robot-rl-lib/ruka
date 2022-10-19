@@ -80,8 +80,8 @@ class Evaluator:
 
             if done:
                 self._paths.append(dict(
-                    actions=np.array(path_rewards),
-                    rewards=np.array(path_actions).reshape((-1,1)),
+                    actions=np.array(path_actions),
+                    rewards=np.array(path_rewards).reshape((-1,1)),
                     env_infos=path_infos,
                 ))
                 paths_frames.extend(frames)
@@ -95,6 +95,7 @@ class Evaluator:
                 path_actions = []
                 path_infos = []
 
+        self._env.reset()
 
         if self._video_prefix and save_video:
             video_path = f"{self._video_prefix}_{epoch}.avi"
@@ -118,14 +119,15 @@ class Evaluator:
 
     def get_diagnostics(self):
 
-        return {
-            "success_rate": self._env.sr_mean,
+        res = {
             "mean_path_len": np.mean([len(x['actions']) for x in self._paths]) if self._paths else -1,
-            "mean_gripper_closes": np.mean(self._closes) if self._closes else -1
-            }
+            "mean_gripper_closes": np.mean(self._closes) if self._closes else -1,
+        }
+
+        if hasattr(self._env, 'sr_mean'):
+            res["success_rate"] = self._env.sr_mean
+
+        return res
 
     def get_snapshot(self):
         return {}
-
-
-

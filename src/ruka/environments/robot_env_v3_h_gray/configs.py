@@ -1,24 +1,35 @@
-import enum
+from enum import Enum
 import dataclasses
 from typing import Tuple, List, Optional
-from ruka.observation import Observe
 
 
 @dataclasses.dataclass
 class BaseDataclass:
     def __getitem__(self, item):
         return getattr(self, item)
-    
-
-class ObjectDataset(enum.Enum):
-    RANDOM_URDFS = "random_urdfs"
-    CUSTOM_GAZEBO = "custom_gazebo"
 
 @dataclasses.dataclass
 class EnvironmentConfig(BaseDataclass):
+    @dataclasses.dataclass
+    class RobotConfig(BaseDataclass):
+        model_path: str
+        max_translation: float
+        max_yaw_rotation: float
+        max_force: float 
+        step_size: float
+        yaw_step: float
+        num_actions_pad: int
+        action_wait: float = .1
+        gripper_wait: float = .2
+    
+    @dataclasses.dataclass
+    class SceneConfig(BaseDataclass):
+        extent: float
+        max_objects: int
+        min_objects: int
 
     @dataclasses.dataclass
-    class OnGripperCameraConfig(BaseDataclass):
+    class SensorConfig(BaseDataclass):
         @dataclasses.dataclass
         class CameraInfoConfig(BaseDataclass):
             height: int
@@ -39,42 +50,19 @@ class EnvironmentConfig(BaseDataclass):
             translation: float
             rotation: float
 
-        @dataclasses.dataclass
-        class CameraRandomizationConfig(BaseDataclass):
-            focal_length: float
-            optical_center: float
-            translation: float
-            rotation: float
-
         camera_info: CameraInfoConfig
         transform: CameraTransformConfig
+        visualize: bool
         randomize: CameraRandomizationConfig
             
     @dataclasses.dataclass
-    class RobotConfig(BaseDataclass):
-        model_path: str
-        action_wait: float
-        gripper_wait: float
-        max_speed: float
-        max_translation: float
-        max_yaw_rotation: float
-        max_force: float
-    
-    @dataclasses.dataclass
-    class SceneConfig(BaseDataclass):
-        extent: float
-        max_objects: int
-        min_objects: int
-        object_dataset: ObjectDataset
-
-    @dataclasses.dataclass
     class RewardConfig(BaseDataclass):
+        shaped: bool
         terminal_reward: float
         lift_success: float
         grasp_reward: float
         delta_z_scale: float
         time_penalty: float
-        terminal_reward_wrong: float
         table_clearing: bool
             
     @dataclasses.dataclass
@@ -82,18 +70,20 @@ class EnvironmentConfig(BaseDataclass):
         init_lambda: float
         n_steps: int
         success_threshold: float
+        window_size: int
         extent: Tuple[float, float]
         robot_height: Tuple[float, float]
         lift_dist: Tuple[float, float]
         max_objects: Tuple[int, int]
         min_objects: Tuple[int, int]
-
+        workspace: Optional[Tuple[float, float]]
+        work_height: Optional[Tuple[float, float]]
+            
+    timefeature: bool
+    time_horizon: int
     robot: RobotConfig
     scene: SceneConfig
+    sensor: SensorConfig
     reward: RewardConfig
     curriculum: CurriculumConfig
-    on_gripper_camera_config: OnGripperCameraConfig
-    observation_types: List[Observe]
-    time_horizon: int
-    real_time: bool = False
-
+        

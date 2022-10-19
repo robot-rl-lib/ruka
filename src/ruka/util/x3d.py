@@ -1,10 +1,57 @@
-import transofrmations
+import numpy as np
+from manipulation_main.common.transformations import euler_from_matrix
+import transformations
 
-from typing import List
+from typing import List, Tuple
 
 
 Vec3 = List[float]
 Quat = List[float]
 
 
-compose_matrix = transformations.compose_matrix
+def compose_matrix_world(pos=None, angles=None):
+    m = np.identity(4)
+
+    if angles is not None:
+        r, p, y = np.deg2rad(angles)
+        m = transformations.euler_matrix(r, -p, -y, 'sxyz')
+
+    if pos is not None:
+        m[:3, 3] = np.array(pos)
+
+    return m
+
+
+def compose_matrix_tool(pos=None, angles=None):
+    m = np.identity(4)
+
+    if angles is not None:
+        r, p, y = np.deg2rad(angles)
+        m = transformations.euler_matrix(r, p, y, 'szxy')
+
+    if pos is not None:
+        m[:3, 3] = np.array(pos)
+
+    return m
+
+
+def decompose_matrix_world(m) -> Tuple[Vec3, Vec3]:
+    m = np.array(m)
+    pos = M[:3, 3]
+    r, p, y = np.rad2deg(euler_from_matrix(M, 'sxyz'))
+    return pos, np.array([r, -p, -y])
+
+
+def decompose_matrix_tool(m) -> Tuple[Vec3, Vec3]:
+    M = np.array(m)
+    pos = M[:3, 3]
+    angles = np.rad2deg(euler_from_matrix(M, 'szxy'))
+    return pos, angles
+
+
+def chain(*transformations):
+    m = np.identity(4)
+    for t in transformations:
+        m = m @ t
+    return m
+

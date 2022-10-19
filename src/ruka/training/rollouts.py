@@ -1,8 +1,13 @@
-import numpy as np
 import copy
+import numpy as np
+import torch as th
+from typing import List, Dict
+
 from stable_baselines3.common.vec_env import VecEnv
 from stable_baselines3.common.vec_env.dummy_vec_env import DummyVecEnv
+import ruka.pytorch_util as ptu
 from ruka.observation import Observation
+from ruka.environments.common.env_util import get_supported_robot_env
 
 def rollout(
         env,
@@ -86,13 +91,14 @@ def rollout(
         full_next_observations=raw_next_obs,
     )
 
-
 def vec_rollout(
         vec_env,
         agent,
         num_steps,
         get_action_kwargs=None,
         last_obs=None,
+        save_image=False,
+        device=None,
     ):
 
     if get_action_kwargs is None:
@@ -104,17 +110,28 @@ def vec_rollout(
     terminals = []
     env_infos = []
     next_observations = []
+    images = []
 
     if last_obs is None:
         agent.reset()
         o = vec_env.reset()
         if isinstance(o, dict):
             o = Observation(o)
+        if save_image:
+            images.append(get_supported_robot_env(vec_env, 'get_image').get_image())         
     else:
         o = last_obs
 
     for _ in range(num_steps):
-        a = agent.get_actions(o.to_pytorch() if isinstance(o, Observation) else o, **get_action_kwargs)
+        o_on_device = o
+        if isinstance(o, Observation):
+            o_on_device = o.to_pytorch(other_device=device)
+        elif isinstance(o, np.ndarray):
+            o_on_device = ptu.from_numpy(o, other_device=device)
+        elif isinstance(o, th.Tensor):
+            o_on_device = o.to(device=device or ptu.device)
+
+        a = agent.get_actions(o_on_device, **get_action_kwargs)
         next_o, r, d, env_info = vec_env.step(copy.deepcopy(a))
         if isinstance(next_o, dict):
             next_o = Observation(next_o)
@@ -126,6 +143,9 @@ def vec_rollout(
         next_observations.append(next_o)
         env_infos.append(env_info)
         o = next_o
+        if save_image:
+            images.append(get_supported_robot_env(vec_env, 'get_image').get_image())        
+
     actions = np.array(actions)
     if len(actions.shape) == 1:
         actions = np.expand_dims(actions, 1)
@@ -142,5 +162,25 @@ def vec_rollout(
         next_observations=next_observations,
         terminals=np.array(terminals).reshape(-1, 1),
         env_infos=env_infos,
-
+        images=np.array(images) if images else None,
     )
+
+
+def join_rollout(rollouts: List[Dict]):
+    """ Concatinate all rollouts in one """
+    res = {}
+    for k in rollouts[0].keys():
+        first_item = rollouts[0][k]
+        if isinstance(first_item, np.ndarray):
+            res[k] = np.concatenate([r[k] for r in rollouts], axis=0)
+        elif isinstance(first_item, Observation):
+            res[k] = Observation.stack([r[k] for r in rollouts])
+        elif isinstance(first_item, list):
+            # join lists
+            res[k] = [j for i in [r[k] for r in rollouts] for j in i]
+        elif first_item is None:
+            res[k] = None
+        else:
+            er_message = f'Unsupported rollout item {k} type {type(res[k])} for join'
+            raise ValueError(er_message)
+    return res

@@ -10,13 +10,13 @@ from enum import Enum
 
 import cv2
 
-from ruka.observation import Observation
+from ruka.observation import Observation, Observe
 from manipulation_main.common import transformations
 from . import actuator, sensor
 from .simulation.simulation import World
 from .rewards import Reward
 from .curriculum import WorkspaceCurriculum
-from .configs import EnvironmentConfig, Observe
+from .configs import EnvironmentConfig
 from .simulation.model import Model
 
 
@@ -58,6 +58,8 @@ class RobotEnv(World):
         self.sr_mean = 0.
         self._last_rgb = None
         self.target_object = None
+
+        self._last_pos = {}
 
         self._observation_types = config.observation_types
 
@@ -122,29 +124,38 @@ class RobotEnv(World):
         rgb_for_video = rgb
 
         if Observe.RGB in self._observation_types:
-            observation['rgb'] = rgb / 255
+            observation[Observe.RGB.value] = rgb / 255
 
         if Observe.GRAY in self._observation_types:
             gray = cv2.cvtColor(rgb, cv2.COLOR_BGR2GRAY) / 255
-            observation['gray'] = gray[..., None]
+            observation[Observe.GRAY.value] = gray[..., None]
 
         if Observe.DEPTH in self._observation_types:
-            observation['depth'] = depth[..., None]
+            observation[Observe.DEPTH.value] = depth[..., None]
 
         if Observe.TARGET_SEGMENTATION in self._observation_types:
             mask = (mask==self.target_object.model_id).astype(float)
-            observation['mask'] = mask[..., None]
+            observation[Observe.TARGET_SEGMENTATION.value] = mask[..., None]
 
             rgb_for_video = np.concatenate(
                 [rgb_for_video, (mask[..., None] * np.ones((1,1,3)) * 255).astype(np.uint8)],
                 axis=1)
 
-        sensor_pad = np.zeros(rgb.shape[:2])
-        sensor_pad[0, 0] = self._actuator.get_state()
-        observation['sensor_pad'] = sensor_pad[..., None]
+        if Observe.ROBOT_POS in self._observation_types:
+            pos, quat = self.get_pose()
+            observation[Observe.ROBOT_POS.value] =  np.r_[pos, quat]
+            
+        if Observe.GRIPPER in self._observation_types:
+            observation[Observe.GRIPPER.value] =  np.r_[self._actuator.get_state()]
+
+        if Observe.SENSOR_PAD in self._observation_types:
+            sensor_pad = np.zeros(rgb.shape[:2])
+            sensor_pad[0, 0] = self._actuator.get_state()
+            observation[Observe.SENSOR_PAD.value] = sensor_pad[..., None]
 
         self._last_rgb = rgb_for_video
-
+        self._last_pos = {'pose': self.get_pose(), 'target': self.target_object.getBase()}
+        
         return observation
 
     def get_pose(self):
