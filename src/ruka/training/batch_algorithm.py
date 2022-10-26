@@ -1,4 +1,5 @@
 import abc
+from typing import Callable
 
 from .buffer import ReplayBuffer, VecEnvReplayBuffer
 from .path_collector import MdpPathCollector, VecTransitionCollector
@@ -127,12 +128,16 @@ class BaseRLAlgorithm(object, metaclass=abc.ABCMeta):
         """
         Trainer
         """
-        logger.record_dict(self.trainer.get_diagnostics(), prefix='trainer/')
+        logger.record_dict({k:v for k,v in self.trainer.get_diagnostics().items() if 'hist' not in k}, prefix='trainer/')
         if use_wandb:
-            wandb.log({'trainer/' + k: v for k, v in self.trainer.get_diagnostics().items()}, step=epoch, commit=False)
+            wandb.log({'trainer/' + k: v for k, v in self.trainer.get_diagnostics().items() if 'hist' not in k}, step=epoch, commit=False)
 
         for k, v in self.trainer.get_diagnostics().items():
-            tb.scalar('trainer/' + k, v)
+            if 'hist' not in k:
+                tb.scalar('trainer/' + k, v)
+            else:
+                tb.add_histogram('trainer/' + k, v)
+                
         """
         Exploration
         """
@@ -243,6 +248,7 @@ class BatchRLAlgorithm(BaseRLAlgorithm, metaclass=abc.ABCMeta):
             min_num_steps_before_training=0,
             snapshot_every: int = 10,
             warmup_steps: int = 0,
+            log_batch: Callable = None,
     ):
         super().__init__(
             trainer,
@@ -262,6 +268,7 @@ class BatchRLAlgorithm(BaseRLAlgorithm, metaclass=abc.ABCMeta):
         self.num_expl_steps_per_train_loop = num_expl_steps_per_train_loop
         self.min_num_steps_before_training = min_num_steps_before_training
         self.warmup_steps = warmup_steps
+        self.log_batch = log_batch
 
     def _train(self):
         print("Filling up replay buffer...")
@@ -293,6 +300,9 @@ class BatchRLAlgorithm(BaseRLAlgorithm, metaclass=abc.ABCMeta):
                     train_data = self.replay_buffer.random_batch(self.batch_size)
                     self.trainer.train(train_data)
 
+                    if self.log_batch is not None:
+                        self.log_batch(train_data, self.trainer._num_train_steps)
+
                     tb.step(self.trainer._num_train_steps)
                     if hasattr(self.expl_env, "sr_mean"):
                         tb.scalar("success_rate", self.expl_env.get_attr("sr_mean")[0])
@@ -306,7 +316,7 @@ class BatchRLAlgorithm(BaseRLAlgorithm, metaclass=abc.ABCMeta):
                     (time.time() - start_epoch_timestamp),
                 "EXPL_TIME": explr_data_collection_time,
             }
-            if hasattr(self.eval_env, 'sr_mean'):
+            if self.eval_env is not None and hasattr(self.eval_env, 'sr_mean'):
                 self.timings["SUCCES RATE EVAL"] = self.eval_env.get_attr("sr_mean")[0]
             if self.eval_env is not None and hasattr(self.eval_env, 'curriculum'):
                 self.timings["CURRICULUM LAMBDA"] = self.expl_env.get_attr("curriculum")[0]._lambda

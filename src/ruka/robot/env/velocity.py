@@ -1,11 +1,27 @@
-from dataclasses import dataclass
-import numpy as np
-from ruka.robot.env import RobotEnv
-from ruka.robot import ArmVelocityController, Camera, Gripper, Robot
-import time
+
+import cv2
 import gym
-from manipulation_main.common import transformations
+import time
+import numpy as np
+from typing import Tuple, List
+from dataclasses import dataclass
+
+from ruka.robot.env import RobotEnv
 from ruka.robot.xarm import XArmError
+from ruka.observation import Observe, Observation
+from ruka.robot import ArmVelocityController, Camera, Gripper, Robot
+from manipulation_main.common import transformations
+
+@dataclass
+class MinMaxLimit:
+    min: float
+    max: float
+
+@dataclass
+class Limits:
+    x: MinMaxLimit
+    y: MinMaxLimit
+    z: MinMaxLimit
 
 
 class VelocityControlRobotEnv(RobotEnv):
@@ -23,8 +39,12 @@ class VelocityControlRobotEnv(RobotEnv):
             gripper_close_position: float,
             gripper_open_position_reset: float,
             max_z: float,
-            dt: float
-        ):
+            dt: float,
+            limits_x: Tuple[float, float] = (150, 600),
+            limits_y: Tuple[float, float] = (-300, 300),
+            limits_z: Tuple[float, float] = (-1000, 650),
+            dict_like: bool = False,
+            observation_types: List[Observe] = list((Observe.DEPTH,))):
         self.robot = robot
         self.camera = camera
         self.arm = arm
@@ -38,9 +58,15 @@ class VelocityControlRobotEnv(RobotEnv):
         self.gripper_open_position_reset = gripper_open_position_reset
         self.max_z = max_z
         self.dt = dt
+        self._limits = Limits(x=MinMaxLimit(*limits_x),
+                              y=MinMaxLimit(*limits_y),
+                              z=MinMaxLimit(*limits_z))
+
+        self._dict_like = dict_like
 
         self._gripper_open = None
         self.__observation_ts = None
+        self._observation_types=observation_types
 
     def reset(self):
         self.robot.reset()
@@ -78,11 +104,11 @@ class VelocityControlRobotEnv(RobotEnv):
         vz *= self.max_xyz_velocity
         vroll *= self.max_roll_velocity
 
-        if x < 150 or x > 600:
+        if x < self._limits.x.min or x > self._limits.x.max:
             raise XArmError('X coordinate exceeds limit')
-        if y < -300 or y > 300:
+        if y < self._limits.y.min or y > self._limits.y.max:
             raise XArmError('Y coordinate exceeds limit')
-        if z > 650:
+        if z > self._limits.z.max:
             raise XArmError('Z coordinate exceeds limit')
 
         if yaw < 0:
@@ -124,13 +150,29 @@ class VelocityControlRobotEnv(RobotEnv):
         """
         RGBD + gripper + z
         """
-        return gym.spaces.Box(0, 1000, shape=(camera.w, camera.h, 7))
+        if not self._dict_like:
+            return gym.spaces.Box(0, 1000, shape=(self.camera.height, self.camera.width, 7))
+        else:
+            observation_space = gym.spaces.Dict({})
+
+            if Observe.RGB in self._observation_types:
+                observation_space[Observe.RGB.value] = gym.spaces.Box(low=0, high=255, shape=(self.camera.height, self.camera.width, 3))
+            if Observe.GRAY in self._observation_types:
+                observation_space[Observe.GRAY.value] = gym.spaces.Box(low=0, high=255, shape=(self.camera.height, self.camera.width, 1))
+            if Observe.DEPTH in self._observation_types:
+                # which correct low high?
+                observation_space[Observe.DEPTH.value] = gym.spaces.Box(low=0, high=255, shape=(self.camera.height, self.camera.width, 1))
+            if Observe.ROBOT_POS in self._observation_types:
+                observation_space[Observe.ROBOT_POS.value] = gym.spaces.Box(low=-1, high=1, shape=(6,))
+            if Observe.GRIPPER in self._observation_types:
+                observation_space[Observe.GRIPPER.value] = gym.spaces.Box(low=-1, high=1, shape=(1,))
+        return observation_space
 
     def close(self):
         self.robot.disable()
         self.camera.stop()
 
-    def _get_observation(self):
+    def _get_observation(self):       
         if self.__observation_ts:
             time.sleep(max(0, self.__observation_ts + self.dt - time.time()))
         else:
@@ -140,6 +182,12 @@ class VelocityControlRobotEnv(RobotEnv):
         frame = self.camera.capture()
         self.__observation_ts = time.time()
 
+        if self._dict_like:
+            return self._dict_like_observation(frame)
+        else:
+            return self._dstack_observation_depricated(frame)
+
+    def _dstack_observation_depricated(self, frame):
         # Gripper + Z.
         x, y, z, _, _, yaw = self.arm.position
         gripper = self.gripper.gripper_position
@@ -153,3 +201,37 @@ class VelocityControlRobotEnv(RobotEnv):
         gripper_pad = np.zeros((self.camera.height, self.camera.width)) + gripper
         gripper_pad = (gripper_pad / max(self.gripper_open_position, self.gripper_open_position_reset)) * 255
         return np.dstack((frame, gripper_pad, z_pad, pos))
+
+    def _dict_like_observation(self, frame):
+
+        rgb = frame[:,:, :3]
+        depth = frame[:,:,3][:,:,None]
+
+        # Gripper + Z.
+        x, y, z, roll, pitch, yaw = self.arm.position
+        gripper = self.gripper.gripper_position / 100.
+
+        obs = Observation()
+
+        if Observe.RGB in self._observation_types:
+            obs[Observe.RGB.value] = rgb.astype(np.uint8)
+        if Observe.GRAY in self._observation_types:
+            obs[Observe.GRAY.value] = cv2.cvtColor(rgb, cv2.COLOR_BGR2GRAY)[:,:,None].astype(np.uint8)
+        if Observe.DEPTH in self._observation_types:
+            obs[Observe.DEPTH.value] = depth.astype(np.float32)
+        if Observe.ROBOT_POS in self._observation_types:
+            obs[Observe.ROBOT_POS.value] = np.array([x, y, z, roll, pitch, yaw], dtype=np.float32)
+        if Observe.GRIPPER in self._observation_types:
+            obs[Observe.GRIPPER.value] = np.array([gripper], dtype=np.float32)
+    
+        return obs
+
+    def go_to_random(self, x_min, x_max, y_min, y_max):
+        x, y, z, roll, pitch, yaw = self.arm.position
+        x_new = np.random.uniform(x_min+1, x_max-1)
+        y_new = np.random.uniform(y_min+1, y_max-1)
+        self.arm.go_to(x_new, y_new, z, roll, pitch, yaw)
+        self.gripper.set_gripper_position(self.gripper_open_position)
+        self._gripper_open = True
+
+

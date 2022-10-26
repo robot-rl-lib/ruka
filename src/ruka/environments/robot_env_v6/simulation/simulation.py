@@ -2,7 +2,7 @@ from enum import Enum
 import pybullet as p
 import time
 import gym
-import os 
+import os
 
 from gym.utils import seeding
 from .model import Model
@@ -14,12 +14,12 @@ class World(gym.Env):
         """Initialize a new simulated world."""
 
         self._scene = scene.OnTable(self, config.scene, validate)
+        self.real_time = config.real_time
 
         self.sim_time = 0.
         self._time_step = 1. / 240.
 
-        self.physics_client = bullet_client.BulletClient(
-            p.GUI if os.environ.get("RUKA_GUI", False) else p.DIRECT)
+        self.physics_client = bullet_client.BulletClient(p.GUI if os.environ.get("RUKA_GUI", False) else p.DIRECT)
 
         self.models = []
 
@@ -37,6 +37,7 @@ class World(gym.Env):
         """Advance the simulation by one step."""
         self.physics_client.stepSimulation()
         self.sim_time += self._time_step
+        if self.real_time: time.sleep(self._time_step)
 
     def reset_sim(self):
         self.physics_client.resetSimulation()
@@ -56,7 +57,7 @@ class World(gym.Env):
     def find_highest(self):
         highest = -float('inf')
         model_id = -1
-        for obj in self._scene.pickable_objects:
+        for obj in self.models[1:len(self.models)-1]:
             if obj:
                 pos, _ = obj.getBase()
                 if pos[2] > highest: 
@@ -64,33 +65,6 @@ class World(gym.Env):
                     model_id = obj.model_id
         return model_id
 
-    def find_higher(self, lift_dist):
-        #TODO make robust
-        #FIXME not working with small lift distance
-
-        # For OnTable scene.
-        thres_height = self.models[2].getBase()[0][2]
-
-        grabbed_objs = []
-        for obj in self._scene.pickable_objects:
-            if obj:
-                pos, _ = obj.getBase()
-                # print("height", pos[2])
-                # print("threshold", thres_height + lift_dist)
-                if pos[2] > (thres_height + lift_dist):
-                    grabbed_objs.append(obj.model_id)
-        return grabbed_objs
-
     def remove_model(self, model_id):
         self.physics_client.removeBody(model_id)
         self.models[model_id] = False
-
-    def remove_models(self, model_ids):
-        for model_id in model_ids:
-            self.physics_client.removeBody(model_id)
-            self.models[model_id] = False
-
-    def get_num_body(self):
-        self.physics_client.syncBodyInfo()
-        # For OnTable scene.
-        return self.physics_client.getNumBodies() - 2

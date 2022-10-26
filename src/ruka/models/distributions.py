@@ -428,4 +428,5 @@ class TanhNormal(Distribution):
             'normal/log_std',
             ptu.get_numpy(torch.log(self.normal_std)),
         ))
+        stats.update({'mean_hist': self.mean})
         return stats

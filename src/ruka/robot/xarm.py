@@ -233,6 +233,31 @@ class XArm(Robot, Arm, Gripper):
                 time.sleep(min(random.expovariate(1.0 / sleep), 0.5))
                 retries += 1
 
+    def go_to(self, x, y, z, roll, pitch, yaw, max_retries = 3):
+        self._api.set_mode(0)
+        self._api.set_state(0)
+        retries = 0
+        sleep = 0.1
+        while True:
+            self._api.reset(wait=True)
+            try:
+                self._api.set_position(x=x, y=y, z=z, roll=roll, pitch=pitch, yaw=yaw, wait=True)
+
+                while np.sqrt(np.sum((np.array([x,y,z]) - np.array(self.position[:3])) ** 2)) > 0.05:
+                    time.sleep(1)
+                self._api.reset(wait=True)
+                return
+            except XArmError:
+                if retries >= max_retries:
+                    raise
+                if retries % 5 == 0:
+                    sleep *= 2
+                logging.error("Raised error during reset")
+                traceback.print_exc()
+                time.sleep(min(random.expovariate(1.0 / sleep), 0.5))
+                retries += 1
+
+
 
 class XArmPositionController(XArm, ArmPositionController):
     def __init__(self, *args, speed: int = 50, **kwargs):

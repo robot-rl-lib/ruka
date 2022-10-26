@@ -11,6 +11,7 @@ from gym.spaces import Box, Discrete
 from stable_baselines3.common.vec_env import VecNormalize
 import itertools
 from ruka.observation import Observation
+from ruka.util.debug import smart_shape
 
 Array = Any
 
@@ -139,6 +140,7 @@ class SimpleReplayBuffer(ReplayBuffer):
 
             self._observations = make_observation_template(self._observation_space, max_replay_buffer_size)
             self._next_observations = make_observation_template(self._observation_space, max_replay_buffer_size)
+            print('Replay buffer shapes:\n', smart_shape(self._observations), flush=True)
         else:
             self._observations = np.zeros((max_replay_buffer_size,) + observation_space.shape)
             self._next_observations = np.zeros((max_replay_buffer_size,) + observation_space.shape)
@@ -352,6 +354,7 @@ class VecEnvReplayBuffer(SimpleReplayBuffer):
             env_info_sizes=None,
             handle_tl: str = False,
             dict_like=False,
+            normalize=True,
     ):
         """
         :param max_replay_buffer_size:
@@ -359,6 +362,7 @@ class VecEnvReplayBuffer(SimpleReplayBuffer):
         """
         self.env = env
         self._action_space = env.action_space
+        self._normalize = normalize
 
         if env_info_sizes is None:
             if hasattr(env, 'info_sizes'):
@@ -383,9 +387,11 @@ class VecEnvReplayBuffer(SimpleReplayBuffer):
             next_observation = self.env.unnormalize_obs(env_info['terminal_observation'])
             terminal = False
         else:
-            observation = self.env.unnormalize_obs(observation)
-        reward = self.env.unnormalize_reward(reward)
-        next_observation = self.env.unnormalize_obs(next_observation)
+            if self._normalize:
+                observation = self.env.unnormalize_obs(observation)
+        if self._normalize:
+            reward = self.env.unnormalize_reward(reward)
+            next_observation = self.env.unnormalize_obs(next_observation)
 
         super().add_sample(
             observation=observation,
@@ -399,9 +405,10 @@ class VecEnvReplayBuffer(SimpleReplayBuffer):
 
     def random_batch(self, batch_size: int):
         batch = super().random_batch(batch_size)
-        batch["observations"] = self.env.normalize_obs(batch["observations"])
-        batch["rewards"] = self.env.normalize_reward(batch["rewards"])
-        batch["next_observations"] = self.env.normalize_obs(batch["next_observations"])
+        if self._normalize:
+            batch["observations"] = self.env.normalize_obs(batch["observations"])
+            batch["rewards"] = self.env.normalize_reward(batch["rewards"])
+            batch["next_observations"] = self.env.normalize_obs(batch["next_observations"])
         return batch
 
     def add_vec_transitions(self, transitions):
@@ -439,7 +446,10 @@ class RadVecEnvReplayBuffer(VecEnvReplayBuffer):
         if self._dict_like:
             cropped = Observation()
 
-            n, _, h, w = observation['depth'].shape
+            for k in ['depth', 'rgb', 'gray']:
+                if k in observation:
+                    n, _, h, w = observation[k].shape
+            
             crop_max = h - self._crop_size + 1
             w1 = np.random.randint(0, crop_max, n)
             h1 = np.random.randint(0, crop_max, n)

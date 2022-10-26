@@ -35,9 +35,8 @@ def _worker_loop(env: VecEnv,
     print(f'Worker start {name}', flush=True)
     chunk_number = 0
     num_collected_steps = 0
+    last_obs = None
     while True:
-        last_obs = None
-        
         cur_policy = policy
         if num_collected_steps < zero_action_steps:
             cur_policy = ZeroPolicy(env)
@@ -52,7 +51,7 @@ def _worker_loop(env: VecEnv,
         )
 
         last_obs = transitions['next_observations'].select_by_index(-1) if isinstance(transitions['next_observations'], Observation) else transitions['next_observations'][-1]
-        
+
         out_transition_queue.put(transitions)
         new_policy_state = in_policy_queue.get()
 
@@ -65,6 +64,7 @@ def _worker_loop(env: VecEnv,
             continue
         else:
             policy.load_state_dict(new_policy_state)    
+    env.reset()
     print(f'Worker terminate {name}', flush=True)
 
 

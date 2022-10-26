@@ -110,7 +110,8 @@ class VecTransitionCollector:
             policy,
             continue_last_path: bool = True,
             rollout_fn=vec_rollout,
-            zero_action_steps = 0
+            zero_action_steps = 0,
+            return_paths = False,
     ):
         self._env = env
         self._policy = policy
@@ -119,6 +120,13 @@ class VecTransitionCollector:
         self._continue_last_path = continue_last_path
         self._zero_action_steps = zero_action_steps
         self._num_collected_steps = 0
+
+        self._return_paths = return_paths
+        self._path_rewards = []
+        self._path_actions = []
+        self._path_info = []    
+        self._paths = []    
+        self._success = deque(maxlen=10)
 
     def collect_transitions(
             self,
@@ -140,15 +148,46 @@ class VecTransitionCollector:
             self._last_obs = transitions['next_observations'].select_by_index(-1) if isinstance(transitions['next_observations'], Observation) else transitions['next_observations'][-1]
 
         self._num_collected_steps += num_transitions
+        self.save_paths_and_calc_sr(transitions)
         return transitions
 
     def get_epoch_paths(self):
-        return None
+        if self._return_paths:
+            return self._paths
 
     def end_epoch(self, epoch):
+        self._paths = []
         return
+    
     def get_diagnostics(self):
-        return {}
+        return {
+            "success_rate": np.mean(self._success),
+            "mean_path_len": np.mean([len(x['actions']) for x in self._paths]) if self._paths else -1,
+            }
 
     def get_snapshot(self):
         return {}
+
+
+    def save_paths_and_calc_sr(self, transitions):
+        for i,t in enumerate(transitions['terminals']):
+            if self._return_paths:
+                self._path_rewards.append(transitions['rewards'][i])
+                self._path_actions.append(transitions['actions'][i])
+                    
+            # used for calc SR
+            self._path_info.append({'is_success': transitions['env_infos'][i][0]['is_success']})
+            
+            if t:
+                if self._return_paths:
+
+
+                    self._paths.append(dict(
+                        actions=np.array(self._path_actions),
+                        rewards=np.array(self._path_actions).reshape((-1,1)),
+                        env_infos=self._path_info,
+                    ))     
+                self._success.append(np.any([v['is_success'] for v in self._path_info]))
+                self._path_rewards = []
+                self._path_actions = []
+                self._path_info = []

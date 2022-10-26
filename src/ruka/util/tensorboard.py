@@ -113,6 +113,31 @@ def add_video(tag: str, vid_tensor: float, step: int = None, fps: int = 10):
     _SUMMARY_WRITER.add_video(tag, vid_tensor, global_step=step, fps=fps)
 
 
+def add_image(tag: str, vid_tensor: float, step: int = None):
+    init()
+
+    if step is None:
+        step = _STEP
+
+    _SUMMARY_WRITER.add_image(tag, vid_tensor, global_step=step)
+
+def add_images(tag: str, vid_tensor: float, step: int = None):
+    init()
+
+    if step is None:
+        step = _STEP
+
+    _SUMMARY_WRITER.add_images(tag, vid_tensor, global_step=step)
+    
+
+def add_histogram(tag: str, tensor: float, step: int = None):
+    init()
+
+    if step is None:
+        step = _STEP
+
+    _SUMMARY_WRITER.add_histogram(tag, tensor, global_step=step)    
+    
 # ----------------------------------------------------------- Implementation --
 
 
