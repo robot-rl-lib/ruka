@@ -1,13 +1,21 @@
+import abc
+import enum
+import numpy as np
 
 from typing import Tuple
 from ruka.util.x3d import Vec3
+
+
+class ControlMode(enum.Enum):
+    POS = 'position'
+    VEL = 'velocity'
 
 
 # -------------------------------------------------------------------- Robot --
 
 
 class Robot:
-    def steady(self):
+    def steady(self, control_mode=False):
         """
         Stop the arm and get ready to move.
 
@@ -115,6 +123,10 @@ class ArmInfo:
 
 
 class ArmPosControlled(Robot):
+    def __init__(self):
+        self._target_pos = None
+        self._target_angles = None
+
     def set_pos(self, pos: Vec3, angles: Vec3):
         """
         Set target cartesian position for the tool center point.
@@ -127,6 +139,16 @@ class ArmPosControlled(Robot):
         Has "wait=False" semantics: does NOT wait until the movement is
         complete before returning.
         """
+        raise NotImplementedError()
+
+    def is_target_reached(self, pos_tolerance=10, angles_tolerance=10):
+        """
+        Check if target position is reached.
+
+        - 'pos_tolerance': max L2 norm of difference between target and real positions
+        - 'angles': max L2 norm of angle difference vector between target and real angles
+        """
+
         raise NotImplementedError()
 
 
@@ -145,6 +167,9 @@ class ArmVelControlled(Robot):
         """
         raise NotImplementedError()
 
+
+class ArmPosVelControlled(ArmPosControlled,ArmVelControlled):
+    pass
 
 # ------------------------------------------------------------------ Gripper --
 
@@ -181,6 +206,47 @@ class GripperPosControlled(Robot):
         complete before returning.
         """
         raise NotImplementedError()
+
+
+# --------------------------------------------------------------- Camera ------
+
+class Camera(abc.ABC):
+    @abc.abstractmethod
+    def start(self):
+        """
+        Start frames capturing pipeline
+        """
+        pass
+
+    @abc.abstractmethod
+    def stop(self):
+        """
+        Stop frames capturing pipeline
+        """
+        pass
+
+    @abc.abstractmethod
+    def capture(self) -> np.ndarray:
+        """
+        Capture single multichannel frame
+        """
+        pass
+
+    @property
+    @abc.abstractmethod
+    def width(self):
+        """
+        Return width of the frame
+        """
+        pass
+
+    @property
+    @abc.abstractmethod
+    def height(self):
+        """
+        Return height of the frame
+        """
+        pass
 
 
 # --------------------------------------------------------------- Exceptions --

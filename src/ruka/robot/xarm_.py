@@ -2,6 +2,7 @@ import inspect
 import logging
 from typing import Tuple
 import numpy as np
+import multiprocessing as mp
 import random
 import time
 import traceback
@@ -13,8 +14,8 @@ from xarm.x3.code import APIState
 from ruka.util.x3d import Vec3
 
 from .robot import \
-    ArmError, ArmInfo, ArmPosControlled, ArmVelControlled, \
-    GripperInfo, GripperPosControlled
+    ArmError, ArmInfo, ArmPosControlled, ArmVelControlled, ArmPosVelControlled, \
+    GripperInfo, GripperPosControlled, ControlMode
 
 logging.basicConfig()
 
@@ -62,7 +63,7 @@ class _XArm(ArmInfo, GripperInfo, GripperPosControlled):
 
     # - Robot - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-    def steady(self):
+    def steady(self, control_mode=False):
         self.hold()
         self._api.reset()
         self._accept_move_commands = True
@@ -158,8 +159,12 @@ class _XArm(ArmInfo, GripperInfo, GripperPosControlled):
 
 
 class XArmPosControlled(_XArm, ArmPosControlled):
-    def steady(self):
-        super().steady()
+    def steady(self, control_mode=False):
+        if control_mode is False:
+            control_mode = ControlMode.POS
+        if control_mode != ControlMode.POS:
+            raise XArmControllerError(APIState.HAS_ERROR, "Cannot control non Pos in PosControlled")
+        _XArm.steady(self, control_mode)
         self._api.set_mode(7)   # Enable online trajectory planning
         self._api.set_state(0)  # Prepare to move
 
@@ -167,16 +172,174 @@ class XArmPosControlled(_XArm, ArmPosControlled):
         self.check()
         if not self._accept_move_commands:
             return
+
+        self._target_pos = pos
+        self._target_angles = angles
         self._api.set_position(
             x=pos[0], y=pos[1], z=pos[2],
             roll=angles[0], pitch=angles[1], yaw=angles[2],
             speed=self._config.max_speed, is_radian=False, wait=True
         )
 
+    def is_target_reached(self, pos_tolerance=3, angles_tolerance=3):
+        pos_diff = np.array(self._target_pos) - np.array(self.pos)
+        angle_diff = (np.array(self._target_angles).squeeze() - np.array(self.angles))
+
+        angle_diff = angle_diff % 360
+        angle_diff = np.minimum(angle_diff, 360 - angle_diff)
+
+        return (np.sqrt(np.sum(pos_diff ** 2)) < pos_tolerance) and (np.sqrt(np.sum(angle_diff ** 2)) < angles_tolerance)
+
+
+class XArmVelOverPosControlled(ArmInfo, GripperInfo, GripperPosControlled, ArmVelControlled):
+    def __init__(self, config: XArmConfig, dt: float = 0.04):
+        self._conn, child_conn = mp.Pipe()
+        self._control_loop_process = mp.Process(
+            target=XArmVelOverPosControlled._control_loop,
+            args=(config, dt, child_conn),
+            daemon=True
+        )
+        self._control_loop_process.start()
+
+    def set_vel(self, vel: Vec3, angular_vel: Vec3):
+        self._rpc('set_vel', vel, angular_vel)
+
+    def park(self):
+        self._rpc('park')
+
+    def hold(self):
+        self._rpc('hold')
+
+    def steady(self, control_mode):
+        self._rpc('steady', control_mode)
+
+    def relax(self):
+        self._rpc('relax')
+
+    @property
+    def pos(self) -> Vec3:
+        return self._rpc('pos')
+
+    @property
+    def speed(self) -> float:
+        return self._rpc('speed')
+
+    @property
+    def angles(self) -> Vec3:
+        return self._rpc('angles')
+
+    @property
+    def pos_limits(self) -> Tuple[Vec3, Vec3]:
+        ...
+
+    @property
+    def angle_limits(self) -> Tuple[Vec3, Vec3]:
+        ...
+
+    @property
+    def gripper_pos(self) -> float:
+        return self._rpc('gripper_pos')
+
+    @property
+    def gripper_pos_limits(self) -> Tuple[float, float]:
+        return self._rpc('gripper_pos_limits')
+
+    def set_gripper_pos(self, pos: int):
+        self._rpc('set_gripper_pos', pos)
+
+    def _rpc(self, action, *args):
+        self._conn.send((action, args))
+        res = self._conn.recv()
+        if isinstance(res, Exception):
+            raise res
+        return res
+
+    @staticmethod
+    def _control_loop(config, dt, conn):
+        class _XArmPosControlledWithSpeed(XArmPosControlled):
+            def set_pos(self, pos: Vec3, angles: Vec3, speed: float):
+                self.check()
+                if not self._accept_move_commands:
+                    return
+                self._api.set_position(
+                    x=pos[0], y=pos[1], z=pos[2],
+                    roll=angles[0], pitch=angles[1], yaw=angles[2],
+                    speed=speed, is_radian=False, wait=False
+                )
+
+            @property
+            def accept_move_commands(self):
+                return self._accept_move_commands
+
+
+        pos_control = _XArmPosControlledWithSpeed(config)
+        vel = np.zeros((3,))
+        angular_vel = np.zeros((3,))
+        try:
+            while True:
+                if conn.poll():
+                    try:
+                        action, args = conn.recv()
+                        if action == 'set_vel':
+                            vel = np.array(args[0])
+                            angular_vel = np.array(args[1])
+                            conn.send(None)
+                        elif action == 'park':
+                            pos_control.park()
+                            conn.send(None)
+                        elif action == 'hold':
+                            pos_control.hold()
+                            conn.send(None)
+                        elif action == 'steady':
+                            control_mode = np.array(args[0])
+                            pos_control.steady(control_mode)
+                            conn.send(None)
+                        elif action == 'relax':
+                            pos_control.relax()
+                            conn.send(None)
+                        elif action == 'go_home':
+                            pos_control.go_home()
+                            conn.send(None)
+                        elif action == 'check':
+                            pos_control.check()
+                            conn.send(None)
+                        elif action == 'pos':
+                            conn.send(pos_control.pos)
+                        elif action == 'speed':
+                            conn.send(pos_control.speed)
+                        elif action == 'angles':
+                            conn.send(pos_control.angles)
+                        elif action == 'gripper_pos':
+                            conn.send(pos_control.gripper_pos)
+                        elif action == 'gripper_pos_limits':
+                            conn.send(pos_control.gripper_pos_limits)
+                        elif action == 'set_gripper_pos':
+                            pos_control.set_gripper_pos(args[0])
+                            conn.send(None)
+                        else:
+                            conn.send(None)
+                    except Exception as e:
+                        traceback.print_exc()
+                        conn.send(e)
+                if pos_control.accept_move_commands:
+                    speed = np.linalg.norm(vel)
+                    pos = np.array(pos_control.pos)
+                    angles = np.array(pos_control.angles)
+                    pos_control.set_pos(list(pos + vel), list(angles + angular_vel), speed)
+                time.sleep(dt)
+        except:
+            traceback.print_exc()
+        finally:
+            pos_control.hold()
+
 
 class XArmVelControlled(_XArm, ArmVelControlled):
-    def steady(self):
-        super().steady()
+    def steady(self, control_mode):
+        if control_mode is False:
+            control_mode = ControlMode.VEL
+        if control_mode != ControlMode.VEL:
+            raise XArmControllerError(APIState.HAS_ERROR, "Cannot control non Vel in VelControlled")
+        _XArm.steady(self,control_mode)
         self._api.set_mode(5)   # Enable velocity control
         self._api.set_state(0)  # Prepare to move
 
@@ -189,19 +352,28 @@ class XArmVelControlled(_XArm, ArmVelControlled):
         vel = np.array(vel)
         speed = np.linalg.norm(vel)
         if speed > self._config.max_speed:
-            vel *= self._max_speed / speed
+            vel *= self._config.max_speed / speed
 
         # Clip angular velocity.
         angular_vel = np.array(angular_vel)
         angular_speed = np.linalg.norm(angular_vel, np.inf)
         if angular_speed > self._config.max_angular_speed:
-            angular_vel *= self._max_angular_vel / vel
+            angular_vel *= self._config.max_angular_speed / angular_speed
 
         # Set.
         x, y, z = vel
         roll, pitch, yaw = angular_vel
         self._api.vc_set_cartesian_velocity(
             [x, y, z, roll, pitch, yaw], is_radian=False)
+
+
+class XArmPosVelControlled(ArmPosVelControlled, XArmPosControlled, XArmVelControlled):
+    def steady(self, control_mode):
+        if control_mode == ControlMode.POS:
+            return XArmPosControlled.steady(self, control_mode)
+        if control_mode == ControlMode.VEL:
+            return XArmVelControlled.steady(self, control_mode)
+        raise NotImplementedError()
 
 
 # --------------------------------------------------------------- Exceptions --

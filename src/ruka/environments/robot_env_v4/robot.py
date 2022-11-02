@@ -73,6 +73,7 @@ class RobotEnv(World):
         self._camera.reset()
         self._reward_fn.reset()
 
+        # self.target_object = self._scene.pickable_objects[-1]
         self.target_object = self._scene.pickable_objects[-1]
         self.pickable_objects = self._scene.pickable_objects
         self._reward_fn.reset()

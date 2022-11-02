@@ -1,17 +1,34 @@
-from . import Camera
+from .robot import Camera
 
 import numpy as np
+
 from pyrealsense2 import pyrealsense2 as rs
+from dataclasses import dataclass
+
+
+@dataclass
+class RealsenseConfig:
+    width: int
+    height: int
+    fps: int
+    enable_color: bool = True
+    enable_infrared: bool = False
 
 
 class RealsenseCamera(Camera):
-    def __init__(self, width: int = 640, height: int = 480, fps: int = 30):
-        self._width = width
-        self._height = height
+    def __init__(self, config: RealsenseConfig):
+        self._width = config.width
+        self._height = config.height
+        self._enable_color = config.enable_color
+        self._enable_infrared = config.enable_infrared
+
         self._pipeline = rs.pipeline()
         self._config = rs.config()
-        self._config.enable_stream(rs.stream.depth, width, height, rs.format.z16, fps)
-        self._config.enable_stream(rs.stream.color, width, height, rs.format.rgb8, fps)
+        self._config.enable_stream(rs.stream.depth, config.width, config.height, rs.format.z16, config.fps)
+        if self._enable_color:
+            self._config.enable_stream(rs.stream.color, config.width, config.height, rs.format.rgb8, config.fps)
+        if self._enable_infrared:
+            self._config.enable_stream(rs.stream.infrared, config.width, config.height, rs.format.y8, config.fps)
 
     def start(self):
         self._pipeline.start(self._config)
@@ -21,9 +38,17 @@ class RealsenseCamera(Camera):
 
     def capture(self) -> np.ndarray:
         frames = self._pipeline.wait_for_frames()
-        color = np.asanyarray(frames.get_color_frame().get_data())
-        depth = np.asanyarray(frames.get_depth_frame().get_data())
-        return np.dstack([color, depth])
+
+        result = []
+        if self._enable_color:
+            result.append(np.asanyarray(frames.get_color_frame().get_data()))
+
+        result.append(np.asanyarray(frames.get_depth_frame().get_data()))
+
+        if self._enable_infrared:
+            result.append(np.asanyarray(frames.get_infrared_frame().get_data()))
+
+        return np.dstack(result)
 
     @property
     def width(self):

@@ -12,23 +12,23 @@ from pybullet_utils import bullet_client
 class World(gym.Env):
     def __init__(self, config, validate):
         """Initialize a new simulated world."""
-
+        self._config = config
         self._scene = scene.OnTable(self, config.scene, validate)
         self.real_time = config.real_time
-
+        
         self.sim_time = 0.
         self._time_step = 1. / 240.
 
         self.physics_client = bullet_client.BulletClient(p.GUI if os.environ.get("RUKA_GUI", False) else p.DIRECT)
 
         self.models = []
-
+        
     def run(self, duration):
         for _ in range(int(duration / self._time_step)):
             self.step_sim()
 
     def add_model(self, path, start_pos, start_orn, scaling=1.):
-        model = Model(self.physics_client)
+        model = Model(self.physics_client, max_speed=self._config.robot.max_speed)
         model.load_model(path, start_pos, start_orn, scaling)
         self.models.append(model)
         return model

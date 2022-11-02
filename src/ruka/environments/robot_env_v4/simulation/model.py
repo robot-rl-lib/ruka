@@ -3,7 +3,7 @@ import numpy as np
 
 
 class Model(object):
-    def __init__(self, physics_client, max_speed=1):
+    def __init__(self, physics_client, max_speed= 1):
         self._physics_client = physics_client
         self.max_speed = max_speed
 
@@ -72,12 +72,14 @@ class _Joint(object):
         return joint_state[0]
 
     def set_position(self, position, max_force=100.):
+        additional = {}
+        if self.max_speed is not None:
+            additional['maxVelocity'] = self.max_speed
         self._physics_client.setJointMotorControl2(
             self.model_id, self.jid,
             controlMode=p.POSITION_CONTROL,
             targetPosition=position,
-            maxVelocity=self.max_speed,
-            force=max_force)
+            force=max_force, **additional)
 
     def disable_motor(self):
         self._physics_client.setJointMotorControl2(

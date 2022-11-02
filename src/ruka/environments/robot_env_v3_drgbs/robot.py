@@ -63,7 +63,7 @@ class RobotEnv(World):
         self._actuator.reset()
         self._camera.reset()
 
-        self._target_object = self._scene.pickable_objects[0]
+        self._target_object = self._scene.pickable_objects[-1]
         self._reward_fn.reset(self._target_object)
 
         self.episode_step = 0

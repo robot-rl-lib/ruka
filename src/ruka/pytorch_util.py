@@ -301,3 +301,22 @@ def tensor(*args, torch_device=None, **kwargs):
 
 def normal(*args, **kwargs):
     return torch.normal(*args, **kwargs).to(device)
+
+
+class TorchAware:
+    """ Interface like nn.Module """
+    def eval(self):
+        pass
+    
+    def to(self, destination):
+        pass
+
+    def train(self, train):
+        pass
+
+    def state_dict(self):
+        return {}
+
+    def load_state_dict(self, state_dict):
+        pass
+    

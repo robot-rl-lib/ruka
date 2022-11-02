@@ -44,11 +44,17 @@ KEYMAP_KEYBOARD_4DOF = {
     'y': DiscreteAxis(ecodes.KEY_E, ecodes.KEY_Q),
     'z': DiscreteAxis(ecodes.KEY_S, ecodes.KEY_W),
     'roll': DiscreteAxis(ecodes.KEY_U, ecodes.KEY_O),
-    'gripper': DiscreteTrigger(ecodes.KEY_SPACE)
+    'gripper': DiscreteTrigger(ecodes.KEY_SPACE),
+    'home': DiscreteTrigger(ecodes.KEY_HOME),
+    'exit': DiscreteTrigger(ecodes.KEY_ESC),
 }
 
 
 # ---------------------------------------------------------------------- HID --
+
+@dataclass
+class HIDConfig:
+    device: str
 
 
 class HID:

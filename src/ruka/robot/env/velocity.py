@@ -7,10 +7,13 @@ from typing import Tuple, List
 from dataclasses import dataclass
 
 from ruka.robot.env import RobotEnv
-from ruka.robot.xarm import XArmError
+from ruka.robot.xarm_ import XArmError
 from ruka.observation import Observe, Observation
-from ruka.robot import ArmVelocityController, Camera, Gripper, Robot
+from ruka.robot.robot import ArmPosVelControlled, Camera, GripperPosControlled, \
+                             Robot, ControlMode
 from manipulation_main.common import transformations
+from ruka.util.x3d import Vec3
+
 
 @dataclass
 class MinMaxLimit:
@@ -29,8 +32,8 @@ class VelocityControlRobotEnv(RobotEnv):
             self,
             camera: Camera,
             robot: Robot,
-            arm: ArmVelocityController,
-            gripper: Gripper,
+            arm: ArmPosVelControlled,
+            gripper: GripperPosControlled,
             stop_time: float,
             gripper_open_close_time: float,
             max_xyz_velocity: float,
@@ -69,11 +72,11 @@ class VelocityControlRobotEnv(RobotEnv):
         self._observation_types=observation_types
 
     def reset(self):
-        self.robot.reset()
+        self.robot.steady(ControlMode.VEL)
 
-        self.arm.set_velocity(0, 0, 0, 0, 0, 0)
+        self.arm.set_vel([0, 0, 0], [0, 0, 0])
         time.sleep(self.gripper_open_close_time)
-        self.gripper.set_gripper_position(self.gripper_open_position)
+        self.gripper.set_gripper_pos(self.gripper_open_position)
         time.sleep(self.gripper_open_close_time)
         self._gripper_open = True
 
@@ -90,7 +93,8 @@ class VelocityControlRobotEnv(RobotEnv):
         vroll = np.clip(vroll, -1, 1)
         gripper = np.clip(gripper, -1, 1)
 
-        x, y, z, roll, pitch, yaw = self.arm.position
+        x, y, z = self.arm.pos
+        roll, pitch, yaw = self.arm.angles
 
         assert -1 <= vx <= 1
         assert -1 <= vy <= 1
@@ -113,7 +117,7 @@ class VelocityControlRobotEnv(RobotEnv):
 
         if yaw < 0:
             yaw += 360
-        if yaw < 120 or yaw > 250:
+        if yaw < 70 or yaw > 290:
             raise XArmError('YAW coordinate exceeds limit')
 
         # Transform from tool-space to world-space.
@@ -124,17 +128,17 @@ class VelocityControlRobotEnv(RobotEnv):
 
         # Open gripper.
         if gripper > 0. and not self._gripper_open:
-            self.gripper.set_gripper_position(self.gripper_open_position)
+            self.gripper.set_gripper_pos(self.gripper_open_position)
             self._gripper_open = True
 
         # Close gripper.
         elif gripper < 0. and self._gripper_open:
-            self.gripper.set_gripper_position(self.gripper_close_position)
+            self.gripper.set_gripper_pos(self.gripper_close_position)
             self._gripper_open = False
 
         # Move.
         else:
-            self.arm.set_velocity(vx, vy, vz, 0, 0, -vroll)
+            self.arm.set_vel([vx, vy, vz], [0, 0, -vroll])
 
         return self._get_observation()
 
@@ -169,7 +173,7 @@ class VelocityControlRobotEnv(RobotEnv):
         return observation_space
 
     def close(self):
-        self.robot.disable()
+        self.robot.park()
         self.camera.stop()
 
     def _get_observation(self):       
@@ -189,14 +193,15 @@ class VelocityControlRobotEnv(RobotEnv):
 
     def _dstack_observation_depricated(self, frame):
         # Gripper + Z.
-        x, y, z, _, _, yaw = self.arm.position
-        gripper = self.gripper.gripper_position
+        x, y, z = self.arm.pos
+        roll, pitch, yaw = self.arm.angles
+        gripper = self.gripper.gripper_pos
 
         z_pad = np.zeros((self.camera.height, self.camera.width)) + z
         z_pad = (z_pad / self.max_z) * 255
 
         pos = np.zeros_like(z_pad)
-        pos[0, 0], pos[0, 1], pos[0, 2] = x, y, yaw
+        pos[0, 0], pos[0, 1], pos[0, 2], pos[0, 3], pos[0, 4], pos[0, 5] = x, y, z, roll, pitch, yaw
 
         gripper_pad = np.zeros((self.camera.height, self.camera.width)) + gripper
         gripper_pad = (gripper_pad / max(self.gripper_open_position, self.gripper_open_position_reset)) * 255
@@ -208,8 +213,9 @@ class VelocityControlRobotEnv(RobotEnv):
         depth = frame[:,:,3][:,:,None]
 
         # Gripper + Z.
-        x, y, z, roll, pitch, yaw = self.arm.position
-        gripper = self.gripper.gripper_position / 100.
+        x, y, z = self.arm.pos
+        roll, pitch, yaw = self.arm.angles
+        gripper = self.gripper.gripper_pos / 100.
 
         obs = Observation()
 
@@ -227,11 +233,14 @@ class VelocityControlRobotEnv(RobotEnv):
         return obs
 
     def go_to_random(self, x_min, x_max, y_min, y_max):
-        x, y, z, roll, pitch, yaw = self.arm.position
+        self.robot.steady(ControlMode.POS)
+
+        x, y, z = self.arm.pos
+        roll, pitch, yaw = self.arm.angles
         x_new = np.random.uniform(x_min+1, x_max-1)
         y_new = np.random.uniform(y_min+1, y_max-1)
-        self.arm.go_to(x_new, y_new, z, roll, pitch, yaw)
-        self.gripper.set_gripper_position(self.gripper_open_position)
+        self.arm.set_pos([x_new, y_new, z], [roll, pitch, yaw])
+        self.gripper.set_gripper_pos(self.gripper_open_position)
         self._gripper_open = True
 
 

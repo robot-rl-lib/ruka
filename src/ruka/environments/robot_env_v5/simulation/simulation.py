@@ -12,7 +12,7 @@ from pybullet_utils import bullet_client
 class World(gym.Env):
     def __init__(self, config, validate):
         """Initialize a new simulated world."""
-
+        self._config = config
         self._scene = scene.OnTable(self, config.scene, validate)
         self.real_time = config.real_time
 
@@ -28,7 +28,7 @@ class World(gym.Env):
             self.step_sim()
 
     def add_model(self, path, start_pos, start_orn, scaling=1.):
-        model = Model(self.physics_client)
+        model = Model(self.physics_client, max_speed=self._config.robot.max_speed)
         model.load_model(path, start_pos, start_orn, scaling)
         self.models.append(model)
         return model

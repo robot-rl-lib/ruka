@@ -3,6 +3,7 @@ import gym
 from collections import namedtuple
 from dataclasses import dataclass
 from typing import Any, Iterator, List
+from ruka.pytorch_util import TorchAware
 
 
 Observation = Any
@@ -25,8 +26,11 @@ class Env:
     def observation_space(self) -> gym.spaces.Space:
         raise NotImplementedError()
 
+    def close(self):
+        pass
 
-class Policy:
+
+class Policy(TorchAware):
     def reset(self):
         pass
 
@@ -49,7 +53,7 @@ class Path:
     observations: List[Observation]  # L + 1
     actions: List[Action]            # L
     rewards: List[float]             # L
-    infos: List[Any]                 # L
+    infos: List[dict]                # L
 
     def __len__(self):
         return len(self.actions)
@@ -59,16 +63,20 @@ class Path:
         assert len(self.actions) == len(self.rewards)
         assert len(self.actions) == len(self.infos)
 
-    def __len__(self):
-        return len(self._actions)
+    def append(self, obs: Observation, action: Action, reward: float, info: dict):
+        self.observations.append(obs)
+        self.actions.append(action)
+        self.rewards.append(reward)
+        self.infos.append(info)
 
     @property
     def transitions(self) -> Iterator[Transition]:
         for i in range(len(self)):
             yield Transition(
-                observation=self._observations[i],
-                action=self._actions[i],
-                reward=self._rewards[i],
-                next_observation=self._observations[i + 1],
-                info=self._infos[i]
+                observation=self.observations[i],
+                action=self.actions[i],
+                reward=self.rewards[i],
+                next_observation=self.observations[i + 1],
+                info=self.infos[i],
+                done= i == len(self) -1
             )

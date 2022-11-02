@@ -31,6 +31,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--snapshot', type=str, default="exp/37_rad_segmgoal_sparse_lat2__tl200-1/190.snapshot")
     parser.add_argument('--n-rollouts', type=int, default=50)
+    parser.add_argument('--for-time', type=int, default=1800)
     args = parser.parse_args()
     return args
 
@@ -142,11 +143,16 @@ def execute_policy(args):
     policy.load_state_dict(snapshot['trainer/policy'])
     policy.to('cuda')
 
-    class AddReset(EncoderTanhGaussianPolicy):
+    class AddReset:
+        def __init__(self, policy) -> None:
+            self.p = policy 
+        def get_action(self, obs):
+            obs = np.concatenate([obs["depth"][None], obs["target_segmentation"][None], obs["sensor_pad"][None]], axis=1)[0]
+            return self.p.get_action(obs)
         def reset(self):
             pass
 
-    stateful_policy = AddReset
+    stateful_policy = AddReset(policy)
 
     from ruka.bc2.evaluator import Evaluator
     eval_path_collector = Evaluator(
@@ -155,7 +161,7 @@ def execute_policy(args):
         video_prefix="vid",
         save_video_every=10
     )
-    print(eval_path_collector.calculate_metrics())
+    print(eval_path_collector.calculate_metrics(args.for_time))
 
 
 if __name__=="__main__":
