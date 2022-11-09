@@ -4,11 +4,11 @@ import itertools
 import numpy as np
 import functools
 from ruka.environments.common.env import Policy
-from ruka.environments.common.path_iterators import collect_paths,collect_transitions, \
+from ruka.environments.common.path_iterators import collect_episodes,collect_transitions, \
                                                     async_thread_collect_transitions, \
-                                                    async_thread_collect_paths, \
+                                                    async_thread_collect_episodes, \
                                                     async_process_collect_transitions, \
-                                                    async_process_collect_paths
+                                                    async_process_collect_episodes
 global_env = None
 def make_env():
     global global_env
@@ -46,23 +46,23 @@ class TestIterators:
         self.env = make_env()
         self.policy = MyPolicy(self.env, 'main')
 
-    def _test_path(self, path_iter):
-        for i,path in enumerate(itertools.islice(path_iter, 10)):
-            assert len(path.actions) == 2, len(path.actions)
-            assert len(path.rewards) == 2, len(path.rewards)
-            assert len(path.infos) == 2, len(path.infos)
-            assert len(path.observations) == 3, len(path.observations)
-            assert path.observations[0].shape == self.env.observation_space.shape, (path.observations[0].shape, self.env.observation_space.shape)
-            assert isinstance(path.actions[0], int), (type(path.actions[0]), path.actions)
-            assert isinstance(path.infos[0], dict), (type(path.infos[0]), path.infos)
-            assert isinstance(path.rewards[0], float), (type(path.rewards[0]), path.rewards)
+    def _test_episode(self, episode_iter):
+        for i,episode in enumerate(itertools.islice(episode_iter, 10)):
+            assert len(episode.actions) == 2, len(episode.actions)
+            assert len(episode.rewards) == 2, len(episode.rewards)
+            assert len(episode.infos) == 2, len(episode.infos)
+            assert len(episode.observations) == 3, len(episode.observations)
+            assert episode.observations[0].shape == self.env.observation_space.shape, (episode.observations[0].shape, self.env.observation_space.shape)
+            assert isinstance(episode.actions[0], int), (type(episode.actions[0]), episode.actions)
+            assert isinstance(episode.infos[0], dict), (type(episode.infos[0]), episode.infos)
+            assert isinstance(episode.rewards[0], float), (type(episode.rewards[0]), episode.rewards)
             
             last_tr = None
-            for j,tr in enumerate(path.transitions):
+            for j,tr in enumerate(episode.transitions):
                 if last_tr is not None:
-                    assert np.all(last_tr.next_observation == tr.observation), (last_tr.next_observation, tr.observation, path.observations)
+                    assert np.all(last_tr.next_observation == tr.observation), (last_tr.next_observation, tr.observation, episode.observations)
                 last_tr = tr
-                assert tr.done == (j == len(path) - 1)
+                assert tr.done == (j == len(episode) - 1)
 
     def _test_transition(self, tr_iter):
         last_obs = None
@@ -84,9 +84,9 @@ class TestIterators:
 
             assert tr.done == ((i + 1) % 2 == 0)
 
-    def test_sync_path_iter(self):
-        path_iter = collect_paths(self.env, self.policy)
-        self._test_path(path_iter)
+    def test_sync_episode_iter(self):
+        episode_iter = collect_episodes(self.env, self.policy)
+        self._test_episode(episode_iter)
 
     def test_sync_transition_iter(self):
         tr_iter = collect_transitions(self.env, self.policy)
@@ -104,14 +104,14 @@ class TestIterators:
         tr_iter = async_process_collect_transitions(make_env, _make_policy, self.policy, 10,  name=name)
         self._test_transition(tr_iter)
 
-    def test_async_thread_path(self):
-        name = 'thread_path'
+    def test_async_thread_episode(self):
+        name = 'thread_episode'
         _make_policy = functools.partial(make_policy, name)        
-        path_iter = async_thread_collect_paths(make_env, _make_policy, self.policy, 10,  name=name)
-        self._test_path(path_iter)
+        episode_iter = async_thread_collect_episodes(make_env, _make_policy, self.policy, 10,  name=name)
+        self._test_episode(episode_iter)
 
-    def test_async_process_path(self):
-        name = 'process_path'
+    def test_async_process_episode(self):
+        name = 'process_episode'
         _make_policy = functools.partial(make_policy, name)          
-        path_iter = async_process_collect_paths(make_env, _make_policy, self.policy, 10,  name=name)
-        self._test_path(path_iter)
+        episode_iter = async_process_collect_episodes(make_env, _make_policy, self.policy, 10,  name=name)
+        self._test_episode(episode_iter)

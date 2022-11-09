@@ -7,8 +7,9 @@ class ImageToPyTorchDictLike(gym.ObservationWrapper):
     Image shape to channels x weight x height
     """
 
-    def __init__(self, env):
+    def __init__(self, env, add_batch_dim = True):
         super(ImageToPyTorchDictLike, self).__init__(env)
+        self._add_batch_dim = add_batch_dim
 
         space_dict = dict()
         for key, space in env.observation_space.items():
@@ -23,9 +24,12 @@ class ImageToPyTorchDictLike(gym.ObservationWrapper):
         result = dict()
         for key, value in observation.items():
             if len(value.shape) == 3:
-                result[key] = np.transpose(value, axes=(2, 0, 1))[None]
+                result[key] = np.transpose(value, axes=(2, 0, 1))
             else:
-                result[key] = value[None]
+                result[key] = value
+            if self._add_batch_dim:
+                result[key] = result[key][None]
+            
         return result
 
 

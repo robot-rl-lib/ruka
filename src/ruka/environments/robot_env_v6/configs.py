@@ -14,6 +14,7 @@ class Observe(enum.Enum):
     SENSOR_PAD = 'sensor_pad'
     HEIGHT = 'height'
     TIMESTEP = 'timestep'
+    TRANSITION_TIME = 'transition_time'
 
 @dataclasses.dataclass
 class BaseDataclass:

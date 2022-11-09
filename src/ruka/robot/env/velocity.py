@@ -72,6 +72,7 @@ class VelocityControlRobotEnv(RobotEnv):
         self._observation_types=observation_types
 
     def reset(self):
+        self.robot.go_home()
         self.robot.steady(ControlMode.VEL)
 
         self.arm.set_vel([0, 0, 0], [0, 0, 0])
@@ -170,6 +171,9 @@ class VelocityControlRobotEnv(RobotEnv):
                 observation_space[Observe.ROBOT_POS.value] = gym.spaces.Box(low=-1, high=1, shape=(6,))
             if Observe.GRIPPER in self._observation_types:
                 observation_space[Observe.GRIPPER.value] = gym.spaces.Box(low=-1, high=1, shape=(1,))
+            if Observe.GRIPPER_OPEN in self._observation_types:
+                observation_space[Observe.GRIPPER_OPEN.value] = gym.spaces.Box(low=0, high=1, shape=(1,))
+
         return observation_space
 
     def close(self):
@@ -215,7 +219,7 @@ class VelocityControlRobotEnv(RobotEnv):
         # Gripper + Z.
         x, y, z = self.arm.pos
         roll, pitch, yaw = self.arm.angles
-        gripper = self.gripper.gripper_pos / 100.
+        gripper = self.gripper.gripper_pos
 
         obs = Observation()
 
@@ -229,6 +233,8 @@ class VelocityControlRobotEnv(RobotEnv):
             obs[Observe.ROBOT_POS.value] = np.array([x, y, z, roll, pitch, yaw], dtype=np.float32)
         if Observe.GRIPPER in self._observation_types:
             obs[Observe.GRIPPER.value] = np.array([gripper], dtype=np.float32)
+        if Observe.GRIPPER_OPEN in self._observation_types:
+            obs[Observe.GRIPPER_OPEN.value] = np.array([self._gripper_open], dtype=np.uint8)
     
         return obs
 

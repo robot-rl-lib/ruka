@@ -7,7 +7,7 @@ from threading import Thread
 import torch.multiprocessing as mp
 
 import ruka.pytorch_util as ptu
-from ruka.environments.common.env import Path, Env, Transition, Policy
+from ruka.environments.common.env import Episode, Env, Transition, Policy
 
 
 # ------------------------------------------------------------------------------------
@@ -28,21 +28,21 @@ def collect_transitions(env: Env, policy: Policy):
         last_obs = obs
 
 
-def collect_paths(env: Env, policy: Policy):
-    """ Iterate over Paths/Episodes """
+def collect_episodes(env: Env, policy: Policy):
+    """ Iterate over Episodes """
     done = True
     while True:
         if done:
             obs = env.reset()
             policy.reset()
             done = False
-            path =  Path([obs], [], [], [])
+            episode =  Episode([obs], [], [], [], [])
 
         action = policy.get_action(obs)
         obs, reward, done, info = env.step(action)
-        path.append(obs, action, reward, info)
+        episode.append(obs, action, reward, done, info)
         if done:
-            yield path
+            yield episode
 
 # ------------------------------------------------------------------------------------
 #                             Async iterators
@@ -65,21 +65,21 @@ def async_thread_collect_transitions(make_env: Callable,
         return AsyncThreadIterator(make_env, make_policy, orig_policy, chunk_size, collect_transitions, name)
 
 
-def async_thread_collect_paths(make_env: Callable,
+def async_thread_collect_episodes(make_env: Callable,
                                make_policy: Callable, 
                                orig_policy: Policy,
                                chunk_size: int,
                                name: Optional[str] = None):  
         """
-        Thread based async Paths iterator 
+        Thread based async Episodes iterator 
         Args:
             make_env: function for create env
             make_policy: function for create policy. Result of creation should have same state_dict as orig_policy
             orig_policy: will syncronized with remote policy (created by make_policy) every chunk size
-            chunk_size: how many paths we can collect without synchronization
+            chunk_size: how many episodes we can collect without synchronization
             name: name for logs and debug
         """                                                
-        return AsyncThreadIterator(make_env, make_policy, orig_policy, chunk_size, collect_paths, name)
+        return AsyncThreadIterator(make_env, make_policy, orig_policy, chunk_size, collect_episodes, name)
 
 
 def async_process_collect_transitions(make_env: Callable,
@@ -99,21 +99,21 @@ def async_process_collect_transitions(make_env: Callable,
         return AsyncProcessIterator(make_env, make_policy, orig_policy, chunk_size, collect_transitions, name)
 
 
-def async_process_collect_paths(make_env: Callable,
+def async_process_collect_episodes(make_env: Callable,
                                 make_policy: Callable, 
                                 orig_policy: Policy,
                                 chunk_size: int,
                                 name: Optional[str] = None):  
         """
-        Process based async Paths iterator 
+        Process based async Episodes iterator 
         Args:
             make_env: function for create env
             make_policy: function for create policy. Result of creation should have same state_dict as orig_policy
             orig_policy: will syncronized with remote policy (created by make_policy) every chunk size
-            chunk_size: how many paths we can collect without synchronization
+            chunk_size: how many episodes we can collect without synchronization
             name: name for logs and debug
         """                                                
-        return AsyncProcessIterator(make_env, make_policy, orig_policy, chunk_size, collect_paths, name)
+        return AsyncProcessIterator(make_env, make_policy, orig_policy, chunk_size, collect_episodes, name)
 
 # ------------------------------------------------------------------------------------
 #                 Base classes for async versions. Not for use outside

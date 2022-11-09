@@ -17,6 +17,9 @@ import ruka.logging.video_and_scene_utils as video_and_scene_utils
 from io import FileIO
 from PIL import Image
 from ruka_os import s3
+from ruka_os.globals import EPISODE_LOGGING_S3_FOLDER,\
+                            EPISODE_LOGGING_S3_BUCKET
+from typing import Optional, List
 from xml.dom import WrongDocumentErr
 
 
@@ -75,6 +78,12 @@ class EpisodeLogger:
         """
         raise NotImplementedError()
 
+    def assign_tag(self, tag: str):
+        """
+        Assign a tag - of type str to this episode
+        """
+        raise NotImplementedError()
+
     def step(self, step_no=-1):
         """
         Switch to next step of simulation.
@@ -117,6 +126,7 @@ class _EpisodeLoggerImpl(EpisodeLogger):
         self.frame_no      = 1    # main frame
         self.X             = {}
         self.DATA          = {}
+        self.tags          = set()
         self.frame_numbers = {}
         self.episode_time  = -1
         self.min_step_no   = -1
@@ -124,6 +134,7 @@ class _EpisodeLoggerImpl(EpisodeLogger):
 
     # drop local dir
     def __del__(self):
+        #print(self.path)
         if self.local_dir:
             shutil.rmtree(self.path)
 
@@ -148,6 +159,7 @@ class _EpisodeLoggerImpl(EpisodeLogger):
                 os.makedirs(dp, exist_ok=True)
                 for tag in self.X[x]:
                     fn = os.path.join(dp, f'{tag}.json')
+                    self.force_dirs(fn)
                     with open(fn, 'w') as f:
                         json.dump(self.X[x][tag]['value'], f)
 
@@ -180,7 +192,6 @@ class _EpisodeLoggerImpl(EpisodeLogger):
                         os.path.join(self.X['video'][tag]['dir'], internal),
                         framerate=internal_framerate)
 
-
                 astro = 'astro.mp4'
                 # render astro clock time!
                 # lets fill the missing steps
@@ -194,6 +205,7 @@ class _EpisodeLoggerImpl(EpisodeLogger):
                         shutil.copyfile(prev, f)
                     else:
                         prev = f
+
                 # now compute the astro frame rate
                 astro_framerate = round(1.0/step_time)
                 final_astro_framerate = video_and_scene_utils.images_in_dir_to_video(
@@ -265,6 +277,7 @@ class _EpisodeLoggerImpl(EpisodeLogger):
                 fn = os.path.join(dp, f'{k}.json')
                 if k == '':
                     fn = os.path.join(self.path, 'info.json')
+                self.force_dirs(fn)
                 with open(fn, 'w') as f:
                     json.dump(self.DATA[k], f)
 
@@ -307,7 +320,7 @@ class _EpisodeLoggerImpl(EpisodeLogger):
         # save episode to S3 or LOCAL folder
         if not self.no_log:
             packer = EpisodePacker()
-            id = packer.pack_and_store(self.path)
+            id = packer.pack_and_store(self.path, list(self.tags))
             print('Episode Logged to:', id)
             url = packer.view_episode_url(id)
             if url:
@@ -411,9 +424,9 @@ class _EpisodeLoggerImpl(EpisodeLogger):
         #    print(f)
         #    raise FileExistsError
 
-        rgb = np.asarray(value[2], dtype=np.uint8)
-        rgb = np.reshape(rgb, (height, width, 4))[:, :, :3]
-        rgbim = Image.fromarray(rgb)
+        #rgb = np.asarray(value, dtype=np.uint8)
+        # rgb = np.reshape(rgb, (height, width, 4))[:, :, :3]
+        rgbim = Image.fromarray(value)
         rgbim_no_alpha = rgbim.convert('RGB')
         rgbim_no_alpha.save(f)
 
@@ -454,10 +467,10 @@ class _EpisodeLoggerImpl(EpisodeLogger):
             self.min_step_no = self.step_no
         if self.max_step_no < 0:
             self.max_step_no = self.step_no
-        if step_no < self.min_step_no:
-            self.min_step_no = step_no
-        if step_no > self.max_step_no:
-            self.max_step_no = step_no
+        if self.step_no < self.min_step_no:
+            self.min_step_no = self.step_no
+        if self.step_no > self.max_step_no:
+            self.max_step_no = self.step_no
 
     # set main-frame number
     def add_frame_number(self, frame_no):
@@ -468,6 +481,13 @@ class _EpisodeLoggerImpl(EpisodeLogger):
     def set_video_option(self, k, v):
         self.video_options[k] = v
 
+    def assign_tag(self, tag):
+        self.tags.add(tag)
+
+    def force_dirs(self, p):
+        dn = os.path.dirname(p)
+        os.makedirs(dn, exist_ok=True)
+
 
 class EpisodePacker:
     def __init__(self, config = False):
@@ -476,7 +496,7 @@ class EpisodePacker:
     # parse config
     def parse_config(self, str):
         if not str:
-            return {'type': 'local', 'folder': os.getcwd()}
+            return {'type': 's3', 'folder': EPISODE_LOGGING_S3_FOLDER, 'as_url': False}
         if str.startswith('local:'):
             return {'type': 'local', 'folder': str[6:]}
         if str.startswith('s3:'):
@@ -541,10 +561,10 @@ class EpisodePacker:
             file_add_prefix(tar_path, ep_path, self.gen_prefix())
 
     # pack and send the episode
-    def pack_and_store(self, path):
+    def pack_and_store(self, path = str, tags: Optional[List[str]] = None) -> str:
 
         id = False
-        ep_path = False
+        ep_path = False        
 
         if self.config['type'] == 'local':
             folder = self.config['folder']
@@ -560,18 +580,30 @@ class EpisodePacker:
 
             with tempfile.NamedTemporaryFile() as tmp:
                 self.pack_to(path, tmp.name)
-                key, url = s3.upload_file(tmp.name, bucket='episodes', folder = self.config['folder'])
+                tmp.flush()
+                key, url = s3.upload_file(tmp.name, bucket=EPISODE_LOGGING_S3_BUCKET, folder = self.config['folder'])
                 if key is False:
                     return False
+                if tags:
+                    self.assign_tags(key, tags)
 
             if self.config['as_url']:
                 id = url
             else:
                 id = 's3://'+key
 
-
-
         return id
+
+    def assign_tags(self, id, tags: List[str]):
+        """
+        Stores to S3 the tags for the packed episode
+
+        id - the s3_key of the episode
+        tags - list of str of tags to associate
+        """
+        if self.config['type'] == 's3':
+            for tag in tags:
+                s3.assign_tag('episodes', id, tag)
 
     # unpack local file
     def unpack_file_to(self, file, path):
@@ -587,10 +619,12 @@ class EpisodePacker:
                     raise NotImplementedError
 
                 tmp.write(f.read())
+                tmp.flush()
                 # TODO: do this chunked read/weite later
                 # not working for somehow?!
                 #for chunk in iter(lambda: f.read(1024), b""):
                 #    tmp.write(chunk)
+            #tmp.close()
             tar_name = tmp.name
             #shutil.copyfile(tar_name, 'aaa.tar.gz')
             #print(tar_name)
@@ -621,6 +655,7 @@ class EpisodePacker:
                     urllib.request.urlretrieve(t['url'], tmp.name)
                 except:
                     return "Can't download URL: "+t['url']
+                tmp.flush()
                 ret = self.unpack_file_to(tmp.name, path)
                 if not (ret is True):
                     return ret
@@ -628,8 +663,9 @@ class EpisodePacker:
         if t['type'] == 's3':
             key = t['key']
             with tempfile.NamedTemporaryFile() as tmp:
-                if not s3.download_file('episodes', key, tmp.name):
+                if not s3.download_file(EPISODE_LOGGING_S3_BUCKET, key, tmp.name):
                     return 'S3 key not found'
+                tmp.flush()
                 ret = self.unpack_file_to(tmp.name, path)
                 if not (ret is True):
                         return ret

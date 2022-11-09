@@ -55,6 +55,7 @@ class RobotEnv(World):
         self.curriculum = WorkspaceCurriculum(config['curriculum'], self, validate)
         self.history = self.curriculum._history
         self.sr_mean = 0.
+        self._last_sim_time = 0
         self._last_rgb = None
         self.target_object = None
 
@@ -90,6 +91,8 @@ class RobotEnv(World):
 
         self.episode_step = 0
         self.status = RobotEnv.Status.RUNNING
+        self._last_sim_time = self.sim_time
+        
         self.obs = self._observe()
         return self.obs
 
@@ -103,6 +106,7 @@ class RobotEnv(World):
             A tuple (obs, reward, done, info), where done is a boolean flag
             indicating whether the current episode finished.
         """
+        self._last_sim_time = self.sim_time
         self._timestep += 1
         self._last_rgb = None
         self._actuator.step(action)
@@ -170,6 +174,9 @@ class RobotEnv(World):
         
         if Observe.TIMESTEP in self._observation_types:
             observation[Observe.TIMESTEP.value] = np.array([self._timestep])
+
+        if Observe.TRANSITION_TIME in self._observation_types:
+            observation[Observe.TRANSITION_TIME.value] = np.array([self.sim_time - self._last_sim_time])
 
         self._last_rgb = rgb_for_video
         self._last_pos = {'pose': self.get_pose(), 'target': self.target_object.getBase()}

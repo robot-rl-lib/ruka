@@ -165,8 +165,9 @@ class XArmPosControlled(_XArm, ArmPosControlled):
         if control_mode != ControlMode.POS:
             raise XArmControllerError(APIState.HAS_ERROR, "Cannot control non Pos in PosControlled")
         _XArm.steady(self, control_mode)
-        self._api.set_mode(7)   # Enable online trajectory planning
+        self._api.set_mode(0)
         self._api.set_state(0)  # Prepare to move
+        time.sleep(.5) # without sleep not work 
 
     def set_pos(self, pos: Vec3, angles: Vec3):
         self.check()
@@ -342,6 +343,7 @@ class XArmVelControlled(_XArm, ArmVelControlled):
         _XArm.steady(self,control_mode)
         self._api.set_mode(5)   # Enable velocity control
         self._api.set_state(0)  # Prepare to move
+        time.sleep(.5) # without sleep not work
 
     def set_vel(self, vel: Vec3, angular_vel: Vec3):
         self.check()

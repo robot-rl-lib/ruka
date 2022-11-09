@@ -20,6 +20,7 @@ def crop_augment(observation, to_crop, crop_size):
 
 def default_collate_fn(sequence_list):
     """ Collates lists of lists of paths
+    # TODO: Make more general
     """
     if not isinstance(sequence_list[0][0], dict):
         return (np.array(sequence_list))
@@ -37,3 +38,4 @@ def numpy_tree_to_torch(dct):
         return out
     else:
         return ptu.from_numpy(dct)
+        

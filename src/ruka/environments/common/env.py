@@ -49,10 +49,11 @@ class Transition:
 
 
 @dataclass
-class Path:
+class Episode:
     observations: List[Observation]  # L + 1
     actions: List[Action]            # L
     rewards: List[float]             # L
+    dones: List[bool]                # L
     infos: List[dict]                # L
 
     def __len__(self):
@@ -61,14 +62,17 @@ class Path:
     def __post_init__(self):
         assert len(self.actions) + 1 == len(self.observations)
         assert len(self.actions) == len(self.rewards)
+        assert len(self.actions) == len(self.dones)
         assert len(self.actions) == len(self.infos)
+        assert not any(self.dones[:-1])
 
-    def append(self, obs: Observation, action: Action, reward: float, info: dict):
+    def append(self, obs: Observation, action: Action, reward: float, done: bool, info: dict):
         self.observations.append(obs)
         self.actions.append(action)
         self.rewards.append(reward)
+        self.dones.append(done)
         self.infos.append(info)
-
+        
     @property
     def transitions(self) -> Iterator[Transition]:
         for i in range(len(self)):
@@ -77,6 +81,6 @@ class Path:
                 action=self.actions[i],
                 reward=self.rewards[i],
                 next_observation=self.observations[i + 1],
-                info=self.infos[i],
-                done= i == len(self) -1
+                done=self.dones[i],
+                info=self.infos[i]
             )

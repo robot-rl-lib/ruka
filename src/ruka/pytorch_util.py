@@ -302,6 +302,20 @@ def tensor(*args, torch_device=None, **kwargs):
 def normal(*args, **kwargs):
     return torch.normal(*args, **kwargs).to(device)
 
+def numpy_tree_to_torch(dct):
+    """ Moves dict of arrays to device
+    """
+    if dct is None:
+        return
+    if isinstance(dct, dict):
+        out = {}
+        for key, val in dct.items():
+            out[key] = numpy_tree_to_torch(val)
+        return out
+    else:
+        return from_numpy(dct)
+        
+
 
 class TorchAware:
     """ Interface like nn.Module """

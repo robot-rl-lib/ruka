@@ -27,5 +27,3 @@ class Observation(dict):
             space[key] = gym.spaces.Box(low=0, high=1, shape=value.shape)
 
         return gym.spaces.Dict(space)
-
-        

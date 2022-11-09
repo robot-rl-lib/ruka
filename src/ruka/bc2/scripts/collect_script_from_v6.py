@@ -170,8 +170,9 @@ def execute_policy(args):
         i_rol += 1
 
         for _ in range(max_path_len):
+            print(np.concatenate([obs["depth"][None], obs["target_segmentation"][None], obs["sensor_pad"][None]], axis=1).shape)
             action = policy.get_action(
-                np.concatenate([obs["depth"][None], obs["target_segmentation"][None], obs["sensor_pad"][None]], axis=1)[0]
+                np.concatenate([obs["depth"], obs["target_segmentation"], obs["sensor_pad"]], axis=0)
                 )
             obs, rew, done, info = env.step(action)
             observations.append(obs)

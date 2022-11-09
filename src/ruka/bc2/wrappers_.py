@@ -1,7 +1,6 @@
-import gym 
-from ruka.bc2.observation import Observation
+import gym
 import numpy as np
-import collections
+from ruka.observation import Observation
 
 
 class WrapObs(gym.ObservationWrapper):
@@ -59,10 +58,8 @@ class SimulateCropWrapper(gym.ObservationWrapper):
 
             lhh = (h - self._crop)//2
             rhh = self._crop + lhh
-
             observation[key] = val[:, lhw:rhw, lhh:rhh]
-
-
+            
         return observation
 
 
