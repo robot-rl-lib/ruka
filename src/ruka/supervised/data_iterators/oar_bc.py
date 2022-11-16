@@ -2,7 +2,16 @@ from typing import Iterator, List, Dict, Union
 from ruka.types import Dictator, Array
 from ruka.environments.common.env import Observation, Episode
 import numpy as np
-import copy 
+import copy
+
+def zeros_like(elem: Dictator):
+    if isinstance(elem, dict):
+        out = dict()
+        for k, v in elem.items():
+            out[k] = zeros_like(v)
+        return out
+    else:
+        return np.zeros_like(elem)
 
 def oa_sequence_iterator(
     it: Iterator[Episode],
@@ -10,7 +19,7 @@ def oa_sequence_iterator(
     random: bool,
     block_size: int,
     ) -> Iterator[Dict[str, List[Union[Dictator, Array]]]]:
-    
+
     done_idxs = []
     observations = []
     actions = []
@@ -50,8 +59,8 @@ def oa_sequence_iterator(
             observations_block = \
                 [copy.deepcopy(observations_block[0]) for _ in range(number_to_pad)] + observations_block
             actions_block = \
-                [copy.deepcopy(actions_block[0]) for _ in range(number_to_pad)] + actions_block
-                        
+                [zeros_like(actions_block[0]) for _ in range(number_to_pad)] + actions_block
+
         yield dict(
             observation_sequence=observations_block,
             action_sequence=actions_block

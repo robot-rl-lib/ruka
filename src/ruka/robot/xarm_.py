@@ -11,7 +11,9 @@ from dataclasses import dataclass
 from xarm.wrapper import XArmAPI
 from xarm.x3.code import APIState
 
-from ruka.util.x3d import Vec3
+from ruka.util.reporter import store_live_robot_params
+from ruka.util.x3d import Vec3, chain, conventional_rotation
+
 
 from .robot import \
     ArmError, ArmInfo, ArmPosControlled, ArmVelControlled, ArmPosVelControlled, \
@@ -38,11 +40,14 @@ class XArmConfig:
     collision_sensitivity: int
     max_reset_retries: int
 
+    report_info: bool = False
+
 
 class _XArm(ArmInfo, GripperInfo, GripperPosControlled):
     def __init__(self, config: XArmConfig):
         self._config = config
         self._api = _with_xarm_error_handling(XArmAPI(config.ip))         # Handle errors
+                        
 
         self._api.clean_error()                                           # Clean all previous errors
         self._api.clean_warn()                                            # Clean all previous warnings
@@ -60,6 +65,9 @@ class _XArm(ArmInfo, GripperInfo, GripperPosControlled):
         self._api.set_tcp_maxacc(config.max_acc)
         self._api.set_tcp_jerk(config.max_jerk)
         self._accept_move_commands = False
+
+        if self._config.report_info:
+            self._api.register_report_callback(self.report_info, report_joints=True)
 
     # - Robot - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
@@ -96,6 +104,10 @@ class _XArm(ArmInfo, GripperInfo, GripperPosControlled):
             try:
                 x, y, z = self._config.home_pos
                 roll, pitch, yaw = self._config.home_angles
+                ang = ruka_to_xarm([roll,pitch,yaw])
+                roll = ang[0]
+                pitch = ang[1]
+                yaw = ang[2]
                 self._api.set_position(x=x, y=y, z=z, roll=roll, pitch=pitch, yaw=yaw, wait=True)
                 self._api.set_collision_sensitivity(self._config.collision_sensitivity)
                 break
@@ -127,7 +139,7 @@ class _XArm(ArmInfo, GripperInfo, GripperPosControlled):
 
     @property
     def angles(self) -> Vec3:
-        return list(self._api.position)[3:]
+        return xarm_to_ruka(list(self._api.position)[3:])
 
     @property
     def pos_limits(self) -> Tuple[Vec3, Vec3]:
@@ -154,6 +166,51 @@ class _XArm(ArmInfo, GripperInfo, GripperPosControlled):
             return
         self._api.set_gripper_position(pos * 10, auto_enable=True, wait=False)
 
+    # - Misc - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
+
+    def report_info(self, data):
+        """
+        Running through a callback method of the ARM which reports
+        new joints positions.
+        The joints array should match the names with the URDF model!
+
+        data - array provided by the callback
+        """
+        if not data.get('joints'):
+            return
+        ds = {}
+
+        # store joints
+        joints = {}
+        num = 1
+        for x in data['joints']:
+            jname = f'joint{num}'
+            joints[jname] = np.deg2rad(x)
+            num += 1        
+        ds['joints'] = joints
+
+        store_live_robot_params('xarm', ds)
+        
+    def force_report_info(self):
+        """
+        Fetch joints params from the API by a request
+        and call the upper function
+        """
+        js = self._api.get_joint_states(is_radian=False)
+        data = {'joints': js[1][0]}
+        self.report_info(data)
+
+# Translate XARM reported angles to RUKA conventional angles
+def xarm_to_ruka(angles: Vec3) -> Vec3:
+    a = conventional_rotation(angles, 2, 90)
+    return [a[0],-a[1],-a[2]]
+
+
+# Translate RUKA conventional angles to XARM API angles
+def ruka_to_xarm(angles: Vec3) -> Vec3:
+    a = [angles[0],-angles[1],-angles[2]]
+    return conventional_rotation(a, 2, -90)
+    
 
 # -------------------------------------------------------------- Controllers --
 
@@ -170,10 +227,14 @@ class XArmPosControlled(_XArm, ArmPosControlled):
         time.sleep(.5) # without sleep not work 
 
     def set_pos(self, pos: Vec3, angles: Vec3):
+        self._target_pos = pos
+        self._target_angles = angles
+
         self.check()
         if not self._accept_move_commands:
             return
 
+        angles = ruka_to_xarm(angles)
         self._target_pos = pos
         self._target_angles = angles
         self._api.set_position(
@@ -262,6 +323,7 @@ class XArmVelOverPosControlled(ArmInfo, GripperInfo, GripperPosControlled, ArmVe
                 self.check()
                 if not self._accept_move_commands:
                     return
+                angles = ruka_to_xarm(angles)
                 self._api.set_position(
                     x=pos[0], y=pos[1], z=pos[2],
                     roll=angles[0], pitch=angles[1], yaw=angles[2],
@@ -364,7 +426,10 @@ class XArmVelControlled(_XArm, ArmVelControlled):
 
         # Set.
         x, y, z = vel
-        roll, pitch, yaw = angular_vel
+        ang = ruka_to_xarm(angular_vel)
+        roll = ang[0]
+        pitch = ang[1]
+        yaw = ang[2]
         self._api.vc_set_cartesian_velocity(
             [x, y, z, roll, pitch, yaw], is_radian=False)
 
@@ -418,6 +483,8 @@ def _with_xarm_error_handling(
                 # Call method.
                 res = method(*args, **kwargs)
                 if not res:
+                    return
+                if res is True:
                     return
                 if isinstance(res, tuple) or isinstance(res, list):
                     code = res[0]

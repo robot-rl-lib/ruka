@@ -1,6 +1,5 @@
 import glob
 import os
-import pybullet_data
 import re
 import shutil
 import tempfile
@@ -80,6 +79,7 @@ def mktemp_file_in_ram():
     return p.stdout.decode('utf-8').strip()
 
 def localize_urdf_obj(objfile, path, fout):
+    import pybullet_data
     with open(objfile) as file:
         lines = file.readlines()
         for line in lines:
@@ -95,6 +95,7 @@ def localize_urdf_obj(objfile, path, fout):
     shutil.copyfile(objfile, os.path.join(path, fout))
 
 def localize_urdf(urdf_in, path, urdf_out, subfolder = "geom"):
+    import pybullet_data
     sub = os.path.join(path,subfolder)
     if not os.path.isdir(sub):
         os.mkdir(sub)

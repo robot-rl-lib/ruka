@@ -14,12 +14,11 @@ def compose_matrix_world(pos: Optional[Vec3] = None, angles: Optional[Vec3] = No
     if angles is not None:
         r, p, y = np.deg2rad(angles)
         m = transformations.euler_matrix(r, -p, -y, 'sxyz')
-
+        
     if pos is not None:
         m[:3, 3] = np.array(pos)
 
     return m
-
 
 def compose_matrix_tool(pos: Optional[Vec3] = None, angles: Optional[Vec3] = None):
     m = np.identity(4)
@@ -33,18 +32,16 @@ def compose_matrix_tool(pos: Optional[Vec3] = None, angles: Optional[Vec3] = Non
 
     return m
 
-
 def decompose_matrix_world(m) -> Tuple[Vec3, Vec3]:
     m = np.array(m)
-    pos = M[:3, 3]
-    r, p, y = np.rad2deg(transformations.euler_from_matrix(M, 'sxyz'))
+    pos = m[:3, 3]
+    r, p, y = np.rad2deg(transformations.euler_from_matrix(m, 'sxyz'))
     return pos, np.array([r, -p, -y])
 
-
 def decompose_matrix_tool(m) -> Tuple[Vec3, Vec3]:
-    M = np.array(m)
-    pos = M[:3, 3]
-    angles = np.rad2deg(transformations.euler_from_matrix(M, 'szxy'))
+    m = np.array(m)
+    pos = m[:3, 3]
+    angles = np.rad2deg(transformations.euler_from_matrix(m, 'szxy'))
     return pos, angles
 
 
@@ -53,4 +50,16 @@ def chain(*transformations):
     for t in transformations:
         m = m @ t
     return m
+
+# Do a rotation of angles in Conventional World
+def conventional_rotation(angles: Vec3, axis: int, angle: float) -> Vec3:
+    tool_matrix = compose_matrix_world(angles=angles)
+    rotate_matrix = transformations.euler_matrix(
+        np.deg2rad(angle) if axis == 0 else 0,
+        np.deg2rad(angle) if axis == 1 else 0,
+        np.deg2rad(angle) if axis == 2 else 0, 'sxyz')
+    conventional_tool_matrix = chain(tool_matrix, rotate_matrix)
+
+    _, angles = decompose_matrix_world(conventional_tool_matrix)
+    return angles
 

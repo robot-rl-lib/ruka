@@ -6,7 +6,7 @@ from typing import Tuple, Union
 
 from ruka.environments.common.controller import Controller
 from ruka.robot.robot import ArmInfo, ArmPosControlled, ArmVelControlled, \
-    GripperPosControlled, Robot
+    GripperPosControlled, Robot, ControlMode
 from ruka.util.x3d import Vec3, chain, compose_matrix_tool, \
     compose_matrix_world, decompose_matrix_world
 
@@ -32,8 +32,8 @@ class RobotController(Controller):
         return gym.spaces.Discrete(6)
 
     def reset(self):
-        self._robot.go_home()
-        self._robot.steady()
+        #self._robot.go_home()
+        self._robot.steady(ControlMode.POS)
 
     def act(self, action):
         """

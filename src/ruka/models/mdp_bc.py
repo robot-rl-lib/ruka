@@ -42,13 +42,29 @@ class MDPModel(nn.Module):
         return _collate_sequence_list(sequence_list)
 
 class StatefulPolicy(Policy):
+
     def __init__(self, policy: MDPModel):
         self.policy = policy
         self.actions = []
         self.observations = []
+
     def get_action(self, observation):
         self.observations.append(observation)
         return self.policy.get_action(self.observations, self.actions)
+
     def reset(self):
         self.actions = []
         self.observations = []
+    
+    @property
+    def model(self) -> MDPModel:
+        return self.policy
+    
+    def to(self, destination):
+        self.policy = self.policy.to(destination)
+
+    def state_dict(self):
+        return self.policy.state_dict()
+
+    def load_state_dict(self, state_dict):
+        return self.policy.load_state_dict(state_dict)

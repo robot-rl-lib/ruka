@@ -1,7 +1,6 @@
-from .swintrack.builder import build_swin_track
-from .single_object_swintrack import SingleObjectSwinTrack
+from .single_object_swintrack import SingleObjectSwinTrack, SingleObjectSwinTrackConfig
 
 __all__ = [
-    'build_swin_track',
     'SingleObjectSwinTrack',
+    'SingleObjectSwinTrackConfig',
 ]

@@ -1,6 +1,7 @@
 import glob
 import os
-from typing import Iterator, Optional
+from typing import Iterator, Optional, Union, Dict, List
+import pathlib
 
 import numpy as np
 import ruka.pytorch_util as ptu
@@ -8,25 +9,50 @@ import ruka.util.distributed_fs as dfs
 import torch
 from ruka.environments.common.env import Episode
 
-
 def filter_successes(it: Iterator[Episode]):
     while True:
         ep = next(it)
         if ep.infos[-1]['is_success']:
             yield ep
 
+from typing import Iterator, List, Optional
+import numpy as np
 
-def save_checkpoint(step, model: ptu.TorchAware, checkpoints_folder: str):
+def iterator_mixin(
+    its: List[Iterator], 
+    probs: Optional[List[float]] = None
+    ) -> Iterator:
+    assert (probs is None) or (len(its) == len(probs))
+    if probs is None:
+        probs = np.ones((len(its),))
+    probs = np.array(probs) / np.array(probs).sum()
+    while True:
+        idx = np.random.choice(len(probs), p=probs)
+        yield next(its[idx])
+        
+        
+def save_checkpoint(step, model_dict: Dict[str, Union[ptu.TorchAware, torch.optim.Optimizer]], checkpoints_folder: str):
+    pathlib.Path(checkpoints_folder).mkdir(parents=True, exist_ok=True)
     filename = os.path.join(checkpoints_folder, str(step) + '.pth')
-    torch.save(model.state_dict(), filename)
+    state_dict_dict = {key: model.state_dict() for key, model in model_dict.items()} 
+    torch.save(state_dict_dict, filename)
     dfs.upload_maybe(filename)
 
+
+def get_latest_checkpoint_filename(checkpoint_filenames: List[str]) -> str:
+    from_steps = [int(os.path.basename(file).split('.')[0]) for file in checkpoint_filenames]
+    ind = np.argmax(from_steps)
+    return checkpoint_filenames[ind], from_steps[ind]
+
+
 def load_checkpoint(
-    model: ptu.TorchAware, 
+    model_dict: Dict[str, Union[ptu.TorchAware, torch.optim.Optimizer]],
     checkpoints_folder: str, 
     dfs_checkpoint: Optional[str] = None,
     local_checkpoint: Optional[str] = None) -> int:
-    
+
+    pathlib.Path(checkpoints_folder).mkdir(parents=True, exist_ok=True)
+
     if (local_checkpoint is not None) and (dfs_checkpoint is not None):
         raise ValueError("minimum one of local_checkpoint or dfs_checkpoint should be set to None")  
 
@@ -45,10 +71,11 @@ def load_checkpoint(
             print("Checkpoints not found.")
             return 0
 
-        from_steps = [int(os.path.basename(file).split('.')[0]) for file in found_checkpoints]
-        latest_checkpoint = found_checkpoints[np.argmax(from_steps)]    
-        start_from = max(from_steps)
+        latest_checkpoint, start_from = get_latest_checkpoint_filename(found_checkpoints)
 
-    model.load_state_dict(torch.load(latest_checkpoint))
+    loaded = torch.load(latest_checkpoint)
+    for key, model in model_dict.items():
+        model.load_state_dict(loaded[key])
     print(f"Loaded model from '{latest_checkpoint}'")
+    
     return start_from

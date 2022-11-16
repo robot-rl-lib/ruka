@@ -126,6 +126,69 @@ _config = dict({
         },
         'weights': 'aux_data/cv/weights/swin_track/SwinTrack-Tiny.pth',
     },
+    'Base-384': {
+        'backbone': {
+            'name': 'swin_base_patch4_window12_384_in22k',
+            'output_layers': [2],
+        },
+        'transformer': {
+            'position_embedding': {
+                'enabled': False,
+                'type': 'sine',
+                'with_branch_index': True,
+            },
+            'untied_position_embedding': {
+                'absolute': {
+                    'enabled': True,
+                },
+                'relative': {
+                    'enabled': True,
+                },
+            },
+            'drop_path': {
+                'rate': 0.1,
+            },
+            'dim': 512,
+            'backbone': {
+                'dim': 512,
+                'stage': 2,
+                'template': {
+                    'shape': [12, 12],
+                },
+                'search': {
+                    'shape': [24, 24],
+                },
+            },
+            'num_heads': 8,
+            'mlp_ratio': 4,
+            'qkv_bias': True,
+            'drop_rate': 0,
+            'attn_drop_rate': 0,
+            'encoder': {
+                'type': 'concatenation_feature_fusion',
+                'num_layers': 8,
+            },
+            'decoder': {
+                'type': 'concatenation_feature_fusion',
+                'num_layers': 1,
+            },
+        },
+        'head': {
+            'output_protocol': {
+                'type': 'ResponseMap',
+                'parameters': {
+                    'label': {
+                        'size': [24, 24],
+                    }
+                }
+            },
+            'type': 'Mlp',
+            'parameters': {
+                'dim': 512,
+            },
+        },
+        'weights': 'aux_data/cv/weights/swin_track/SwinTrack-Base-384.pth',
+    },
 })
 
 def build_swin_track(swin_track_type):
@@ -134,18 +197,7 @@ def build_swin_track(swin_track_type):
 
     model = build_swin_track_by_config(_config[swin_track_type])
 
-    weights_remote = _config[swin_track_type]['weights']
-    weights_local = os.path.basename(weights_remote)
-
-    if not os.path.exists(weights_local):
-        try:
-            print(f'Downloading weights: {weights_remote} -> {weights_local}')
-            dfs.download(weights_remote, weights_local)
-        except:
-            print(f'Error while downloading weights. Removing {weights_local}')
-            os.remove(weights_local)
-            raise
-
+    weights_local = dfs.download_if_not_exists(_config[swin_track_type]['weights'])
     model.load_state_dict(torch.load(weights_local, map_location='cpu')['model'])
 
     return model.eval()

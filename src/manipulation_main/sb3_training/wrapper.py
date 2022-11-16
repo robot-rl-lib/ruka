@@ -1,6 +1,7 @@
 import gym
 import numpy as np
 from gym.wrappers import TimeLimit
+from ruka.observation import Observation
 
 class ImageToPyTorchDictLike(gym.ObservationWrapper):
     """
@@ -21,7 +22,7 @@ class ImageToPyTorchDictLike(gym.ObservationWrapper):
         self.observation_space = gym.spaces.Dict(space_dict)
 
     def observation(self, observation):
-        result = dict()
+        result = Observation()
         for key, value in observation.items():
             if len(value.shape) == 3:
                 result[key] = np.transpose(value, axes=(2, 0, 1))

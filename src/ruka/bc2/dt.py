@@ -313,3 +313,9 @@ class DTStatefulPolicy:
     def reset(self):
         self.actions = collections.deque(maxlen=self._seqlen - 1)
         self.observations = collections.deque(maxlen=self._seqlen)
+
+    def state_dict(self):
+        return self.policy.state_dict()
+
+    def load_state_dict(self, state_dict):
+        return self.policy.load_state_dict(state_dict)

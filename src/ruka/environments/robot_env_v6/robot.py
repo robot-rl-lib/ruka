@@ -19,7 +19,6 @@ from .configs import EnvironmentConfig, Observe
 from .simulation.model import Model
 
 
-
 class RobotEnv(World):
     class Status(Enum):
         RUNNING = 0
@@ -131,7 +130,12 @@ class RobotEnv(World):
         if len(self.curriculum._history) != 0:
             self.sr_mean = np.mean(self.curriculum._history)
         super().step_sim()
-        return self.obs, reward, done, {"is_success":self.status==RobotEnv.Status.SUCCESS, "is_time_limit": self.status==RobotEnv.Status.TIME_LIMIT}
+        return self.obs, reward, done, dict(
+                                            is_success=self.status==RobotEnv.Status.SUCCESS,
+                                            is_time_limit=self.status==RobotEnv.Status.TIME_LIMIT,
+                                            transition_time=self.sim_time - self._last_sim_time
+                                        )
+            
 
     def _observe(self):
         rgb, depth, mask = self._camera.get_state()

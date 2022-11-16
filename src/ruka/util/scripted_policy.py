@@ -1,6 +1,8 @@
 import numpy as np
+import random
+from ruka.environments.common.env import Policy, Env, Observation, Action
 
-def get_supported_robot_env(env):
+def get_supported_robot_env(env: Env):
     if hasattr(env, '_actuator') and hasattr(env, '_last_pos'):
         return env
     if hasattr(env, 'envs'):
@@ -10,16 +12,14 @@ def get_supported_robot_env(env):
     return None
 
 
-class ScriptedPolicy:
+class ScriptedPolicy(Policy):
     """ 1. Position above target in XY plate
         2. Moving down to target
         3. Rotate while decrease distance between gripper and target
         4. Try grasp and move up
         5. Goto 3 if grasp fail """
-
-    _stages = ['xy', 'down', 'rot', 'up']
     
-    def __init__(self, env,
+    def __init__(self, env: Env,
                 xy_threshold: float,
                 down_threshold: float,
                 rot_threshold: float,
@@ -35,6 +35,8 @@ class ScriptedPolicy:
         self._step = 0
         self._stage = 0
         self._stage_step = 0
+        
+        self._stages = ['xy', 'down', 'rot', 'up']
 
         self._action_shape = env.action_space.shape
         assert self._action_shape == (5,), 'Support only (x, -y, -z, yaw_rot, open/close) action space'
@@ -89,7 +91,7 @@ class ScriptedPolicy:
         act[-1] = -1
         return act
         
-    def get_action(self, _):
+    def get_action(self, *args, **kwargs):
         rob_xyz = np.array(self._r._last_pos['pose'][0])
         tgt_xyz = np.array(self._r._last_pos['target'][0])
         
@@ -131,3 +133,80 @@ class ScriptedPolicy:
         self._step = 0
         self._stage = 0
         self._stage_step = 0
+
+class ScriptedNoisyPolicy(ScriptedPolicy):
+    """ 1. Position above target in XY plate
+        2. Moving down to target
+        3. Rotate while decrease distance between gripper and target
+        4. Try grasp and move up
+        5. Goto 3 if grasp fail """
+    
+    def __init__(self, env,
+                xy_threshold: float,
+                down_threshold: float,
+                rot_threshold: float,
+                clip_action: float,
+                scale_action: float, 
+                random_prob: float):
+        super().__init__(env=env,
+                xy_threshold=xy_threshold,
+                down_threshold=down_threshold,
+                rot_threshold=rot_threshold,
+                clip_action=clip_action,
+                scale_action=scale_action)
+        self._random_prob = random_prob
+
+    def get_action(self, *args, **kwargs):
+        if random.random() < self._random_prob and self._stage <= 2:
+            return np.clip(-self._clip_action,self._clip_action, self._r.action_space.sample()) * \
+                self._scale_action
+        return super().get_action(*args, **kwargs)
+
+class ScriptedNoopPolicy(ScriptedPolicy):
+    """ 1. Position above target in XY plate
+        2. Moving down to target
+        3. Rotate while decrease distance between gripper and target
+        4. Try grasp and move up
+        5. Goto 3 if grasp fail """
+    
+    def __init__(self, env,
+                xy_threshold: float,
+                down_threshold: float,
+                rot_threshold: float,
+                clip_action: float,
+                scale_action: float, 
+                random_prob: float):
+        super().__init__(env=env,
+                xy_threshold=xy_threshold,
+                down_threshold=down_threshold,
+                rot_threshold=rot_threshold,
+                clip_action=clip_action,
+                scale_action=scale_action)
+        self._random_prob = random_prob
+
+    def get_action(self, *args, **kwargs):
+        if random.random() < self._random_prob:
+            return np.zeros(self._action_shape, dtype=np.float32)
+        return super().get_action(*args, **kwargs)
+
+class ScriptedCorruptedPolicy(ScriptedPolicy):
+    """ 1. Position above target in XY plate
+        2. Moving down to target
+        3. Rotate while decrease distance between gripper and target
+        4. Try grasp and move up
+        5. Goto 3 if grasp fail """
+    
+    def __init__(self, env,
+                xy_threshold: float,
+                down_threshold: float,
+                rot_threshold: float,
+                clip_action: float,
+                scale_action: float):
+        super().__init__(env=env,
+                xy_threshold=xy_threshold,
+                down_threshold=down_threshold,
+                rot_threshold=rot_threshold,
+                clip_action=clip_action,
+                scale_action=scale_action)
+        self._stages = ['down', 'xy', 'rot', 'up']
+

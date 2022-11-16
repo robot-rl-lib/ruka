@@ -5,7 +5,6 @@ import numpy as np
 
 import ruka.pytorch_util as ptu
 from ruka.util.augmentation import crop_augment
-from ...models.mdp_bc import MDPModel
 from .base import Loss
 import functools
 import ruka.util.tensorboard as tb
@@ -14,7 +13,7 @@ import torch
 class BCRADLoss(Loss):
     def __init__(
             self,
-            model: MDPModel,
+            model: nn.Module,
             crop_size=60,
             to_crop=['depth', 'target_segmentation', 'gray'],
             log_stats_every: Optional[int] = None
@@ -40,7 +39,8 @@ class BCRADLoss(Loss):
 
         # target selection
         actions = batch['action_sequence_batch'][:, -1, ...]
-
+        batch['action_sequence_batch'] = batch['action_sequence_batch'][:, :-1, ...]
+        
         # loss computation
         pred_actions = self._model(batch)
         bc_loss = self._bc_criterion(pred_actions, actions)

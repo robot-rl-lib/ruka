@@ -1,6 +1,7 @@
 import pathlib
 from dataclasses import dataclass
 from typing import Iterator, List, Optional, Callable
+import os
 
 import torch
 from ruka.models.losses.base import Loss
@@ -46,8 +47,7 @@ def train(config: TrainConfig) -> None:
     callbacks = config.callbacks
     optimizer = config.optimizer
 
-    pathlib.Path(config.checkpoint_path).mkdir(parents=True, exist_ok=True)
-    start_step = load_checkpoint(loss_module, 
+    start_step = load_checkpoint(dict(loss=loss_module, optimizer=optimizer),
                                 config.checkpoint_path, 
                                 config.dfs_checkpoint,
                                 config.local_checkpoint)
@@ -68,7 +68,7 @@ def train(config: TrainConfig) -> None:
         [cb(step, batch, config) for cb in callbacks]
         loss_module.log_stats(step, prefix='training/')
         if (step + 1) % config.checkpoint_every == 0:
-            save_checkpoint(step, loss_module, config.checkpoint_path) 
+            save_checkpoint(step, dict(loss=loss_module, optimizer=optimizer), config.checkpoint_path) 
         print(f"Step {step}")
     
     print("finished!")

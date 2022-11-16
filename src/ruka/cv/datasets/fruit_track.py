@@ -3,41 +3,39 @@ import torch
 from torch.utils.data import Dataset
 import os
 import numpy as np
+import json
+from ruka.cv.datasets import SingleObjectTrackingEpisode
 
 
-class FruitTrackEpisode(Dataset):
-    def __init__(self, episode_path):
+class FruitTrack(Dataset):
+    def __init__(self, path):
         super().__init__()
 
-        def read_boxes(path):
-            res = []
-            with open(path, 'r') as f:
-                for l in f:
-                    t = tuple(map(int, l.split()))
-                    res.append((t[1], t[0], t[3], t[2],))
-            return res
+        self.path = path
 
-        self.rgb = []
-        self.boxes = []
+        with open(os.path.join(self.path, 'info.json'), 'r') as f:
+            meta = json.load(f)
 
-        frame = 0
-        while True:
-            frame_str = str(frame).zfill(4)
-            if not os.path.exists(os.path.join(episode_path, frame_str + '_rgb.jpg')):
-                break
-
-            self.rgb.append(cv2.imread(os.path.join(episode_path, frame_str + '_rgb.jpg')))
-            self.boxes.append(read_boxes(os.path.join(episode_path, frame_str + '_boxes.txt')))
-
-            frame += 1
+        self.episodes = []
+        for ep in meta['episodes']:
+            self.episodes.append({
+                'frames': meta['runs'][ep['run']],
+                'boxes': ep['boxes'],
+                'object': ep['object'],
+            })
 
     def __len__(self):
-        return len(self.rgb)
+        return len(self.episodes)
 
     def __getitem__(self, idx):
-        assert isinstance(idx, int)
+        obj = self.episodes[idx]['object']
+
+        reference = cv2.imread(os.path.join(self.path, 'reference', f'{obj}.jpeg'))
+        assert reference is not None
+        reference = np.ascontiguousarray(reference[:, :, ::-1])
 
         return {
-            'rgb': self.rgb[idx],
-            'boxes': self.boxes[idx],
+            'episode': SingleObjectTrackingEpisode(self.path, self.episodes[idx]['frames'], self.episodes[idx]['boxes']),
+            'object': obj,
+            'reference': reference,
         }

@@ -320,17 +320,17 @@ def numpy_tree_to_torch(dct):
 class TorchAware:
     """ Interface like nn.Module """
     def eval(self):
-        pass
+        return self.train(False)
     
     def to(self, destination):
-        pass
+        raise NotImplementedError()
 
-    def train(self, train):
+    def train(self, mode: bool = True):
         pass
 
     def state_dict(self):
-        return {}
+        raise NotImplementedError()
 
     def load_state_dict(self, state_dict):
-        pass
+        raise NotImplementedError()
     

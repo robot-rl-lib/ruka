@@ -1,5 +1,6 @@
 import os.path
 
+from typing import List
 from ruka_os import distributed_fs as dfs, in_cloud, DFS_CWD
 
 
@@ -40,9 +41,40 @@ def upload(local_path, wait=True):
 
 def upload_maybe(local_path, wait=True):
     """Upload if should_sync()."""
-    if should_sync(): 
+    if should_sync():
         upload(local_path, wait=wait)
 
 
 def download(remote_path, local_path):
     return dfs.download(remote_path, local_path)
+
+
+def download_if_not_exists(remote_path, local_path=None):
+    if local_path is None:
+        local_path = os.path.basename(remote_path)
+
+    if not os.path.exists(local_path):
+        try:
+            print(f'Downloading: {remote_path} -> {local_path}')
+            dfs.download(remote_path, local_path)
+        except:
+            print(f'Error while downloading. Removing {local_path}')
+            os.remove(local_path)
+            raise
+    else:
+        print('Local path exists, skipping download')
+
+    return local_path
+
+
+def download_zip_and_extract(remote_path, local_path=None):
+    if local_path is None:
+        local_path = os.path.basename(remote_path)
+
+    download_if_not_exists(remote_path, local_path)
+
+    if not os.path.exists(os.path.splitext(local_path)[0]):
+        print('Extracting data')
+        os.system(f'unzip -q {local_path}')
+    else:
+        print('Skipping extraction')

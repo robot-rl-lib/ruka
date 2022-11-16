@@ -32,17 +32,26 @@ def collect_episodes(env: Env, policy: Policy):
     """ Iterate over Episodes """
     done = True
     while True:
-        if done:
-            obs = env.reset()
-            policy.reset()
-            done = False
-            episode =  Episode([obs], [], [], [], [])
+        obs = env.reset()
+        policy.reset()
 
-        action = policy.get_action(obs)
-        obs, reward, done, info = env.step(action)
-        episode.append(obs, action, reward, done, info)
-        if done:
-            yield episode
+        obs_list = [obs]
+        acts_list = []
+        rews_list = []
+        dones_list = []
+        infos_list = []
+        done = False 
+
+        while not done:
+            action = policy.get_action(obs)
+            obs, reward, done, info = env.step(action)
+            obs_list.append(obs)
+            acts_list.append(action)
+            rews_list.append(reward)
+            dones_list.append(done)
+            infos_list.append(info)
+
+        yield Episode(obs_list, acts_list, rews_list, dones_list, infos_list)
 
 # ------------------------------------------------------------------------------------
 #                             Async iterators
