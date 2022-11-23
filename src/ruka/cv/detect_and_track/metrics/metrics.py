@@ -18,4 +18,4 @@ class DetectAndTrackMetricsComputer(MetricsComputer):
         raise NotImplementedError()
 
     def compute_metrics(self) -> Dict[str, float]:
-        raise NotImplementedError()
+        ...

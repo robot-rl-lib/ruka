@@ -17,7 +17,6 @@ from ruka.environments.robot_env_v5.configs import EnvironmentConfig, ObjectData
 from manipulation_main.sb3_training.wrapper import ImageToPyTorchDictLike
 from ruka.logging.episode import EpisodeLogParams, log_episode, get_episode, \
     save_episode, load_episode
-from ruka.util.array_semantics import RGB, Grayscale, Depth
 
 
 # -------------------------------------------------------------------- Setup --
@@ -115,10 +114,10 @@ def PSNR(original, compressed, max_pixel=255.0):
 class ConvImgs(gym.ObservationWrapper):
     def observation(self, obs):
         gray = obs['gray']
-        obs['rgb'] = RGB((obs['rgb'] * 255).astype(np.uint8))
-        obs['gray'] = Grayscale((gray * 255).astype(np.uint8))
-        obs['mask'] = Depth((gray * 255).astype(np.uint16))
-        obs['depth'] = Depth((obs['depth'] * 1000).astype(np.uint16))
+        obs['rgb'] = (obs['rgb'] * 255).astype(np.uint8)
+        obs['gray'] = (gray * 255).astype(np.uint8)
+        obs['mask'] = (gray * 255).astype(np.uint16)
+        obs['depth'] = (obs['depth'] * 1000).astype(np.uint16)
         return obs
 
 
@@ -272,7 +271,8 @@ def test_compressed():
             log_episode(
                 logger,
                 episode,
-                EpisodeLogParams(video_fps=video_fps, compress=True)
+                EpisodeLogParams(
+                    video_fps=video_fps, compress=True, compress_heuristic=True)
             )
             size_c = getsize(logger)
 

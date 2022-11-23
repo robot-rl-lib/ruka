@@ -133,7 +133,8 @@ class RobotEnv(World):
         return self.obs, reward, done, dict(
                                             is_success=self.status==RobotEnv.Status.SUCCESS,
                                             is_time_limit=self.status==RobotEnv.Status.TIME_LIMIT,
-                                            transition_time=self.sim_time - self._last_sim_time
+                                            timestamp_start_step = self._last_sim_time,
+                                            timestamp_finish_step = self.sim_time
                                         )
             
 

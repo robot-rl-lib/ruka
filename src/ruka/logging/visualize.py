@@ -3,7 +3,6 @@ import ruka.util.nested_dict as nd
 
 from numpy.typing import NDArray
 from typing import Any
-from ruka.util.array_semantics import RGB, Grayscale, Depth
 
 from .logger import Logger
 
@@ -13,7 +12,7 @@ def visualize_nested_dict(
         data: nd.NestedDict,
         prefix: str,
         sep: str = '/',
-        auto: bool = False,
+        auto: bool = True,
         has_batch_dim: bool = False,
     ):
     """
@@ -76,14 +75,6 @@ def visualize_nested_dict(
                 else:
                     for i in range(v.shape[2]):
                         logger.add_video_frame(f'{k}[{i}]', _convert_img(v))
-
-        # Images.
-        if isinstance(v, RGB):
-            logger.add_video_frame(k, v.buf)
-        if isinstance(v, Grayscale):
-            logger.add_video_frame(k, v.buf)
-        if isinstance(v, Depth):
-            logger.add_video_frame(k, (v.buf // 256).astype(np.uint8))
 
 
 def _convert_img(img: NDArray) -> NDArray:

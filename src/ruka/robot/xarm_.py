@@ -211,6 +211,10 @@ def ruka_to_xarm(angles: Vec3) -> Vec3:
     a = [angles[0],-angles[1],-angles[2]]
     return conventional_rotation(a, 2, -90)
     
+# Translate RUKA conventional angular velocity to XARM API velocity
+def ruka_to_xarm_vel(angles_vel: Vec3) -> Vec3:
+    a = [angles_vel[0],-angles_vel[1],-angles_vel[2]]
+    return a
 
 # -------------------------------------------------------------- Controllers --
 
@@ -426,7 +430,7 @@ class XArmVelControlled(_XArm, ArmVelControlled):
 
         # Set.
         x, y, z = vel
-        ang = ruka_to_xarm(angular_vel)
+        ang = ruka_to_xarm_vel(angular_vel)
         roll = ang[0]
         pitch = ang[1]
         yaw = ang[2]

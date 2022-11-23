@@ -8,26 +8,48 @@ NestedDict = Union[Any, Dict[str, 'NestedDict']]
 def map_inplace(
         fn: Callable,
         x: NestedDict,
-        enter_dataclasses: bool = False
+        enter_dataclasses: bool = False,
+        enter_lists: bool = False,
+        apply_on_nodes: bool = False,
     ) -> NestedDict:
     """
+    Performs function on a nested dict recursively.
     If x is an atomic object, returns fn(x).
-    If x is a dict/dataclass, returns x, but after modification.
+    If x is a dict/dataclass/list, returns x, but after modification.
+    Additionaly may call fn(x) on dicts.
+    Args:
+        fn (Callable): function to call
+        x (NestedDict): object to modify
+        enter_dataclasses (bool, optional): if True will walk into dataclasses.
+                                            Will treat it as atomic objects otherwise.
+                                            Defaults to False.
+        enter_lists (bool, optional): Walk into lists or treat is as atomic objects. Defaults to False.
+        apply_on_nodes (bool, optional): Apply function on nodes. Defaults to False.
+
+    Returns:
+        NestedDict: modified object.
     """
     # Dict.
     if isinstance(x, dict):
         for k in x.keys():
-            x[k] = map_inplace(fn, x[k], enter_dataclasses)
-        return x
+            x[k] = map_inplace(fn, x[k], enter_dataclasses, enter_lists, apply_on_nodes)
+        return fn(x) if apply_on_nodes else x
 
     # Dataclass.
     if enter_dataclasses and (is_dataclass(x) and not isinstance(x, type)):
         try:
             for k in fields(x):
-                setattr(x, k, fn(getattr(x, k)))
-            return x
+                v = map_inplace(fn, getattr(x, k.name), enter_dataclasses, enter_lists, apply_on_nodes)
+                setattr(x, k.name, v)
+            return fn(x) if apply_on_nodes else x
         except FrozenInstanceError:
             return fn(x)
+
+    # List.
+    if enter_lists and isinstance(x, list):
+        for ind in range(len(x)):
+            x[ind] = map_inplace(fn, x[ind], enter_dataclasses, enter_lists, apply_on_nodes)
+        return fn(x) if apply_on_nodes else x
 
     # Regular item.
     return fn(x)
@@ -62,12 +84,14 @@ def items(
     if isinstance(x, dict):
         for k, v in x.items():
             yield from items(v, f'{prefix}{sep}{k}', sep, enter_dataclasses)
+        return
 
     # Dataclass.
     if enter_dataclasses and (is_dataclass(x) and not isinstance(x, type)):
         for k in fields(x):
-            v = getattr(x, k)
-            yield from items(v, f'{prefix}{sep}{k}', sep, enter_dataclasses)
+            v = getattr(x, k.name)
+            yield from items(v, f'{prefix}{sep}{k.name}', sep, enter_dataclasses)
+        return
 
     # Item.
     yield (prefix, x)

@@ -137,13 +137,17 @@ class FPSParams:
 class DataType:
     SCALAR = 'scalar'
     TEXT = 'text'
-    VIDEO_FRAME = 'video_frame'
+    VIDEO = 'video'
     DATA = 'data'
     METADATA = 'metadata'
 
 
 class LogReader:
-    def get_keys(self) -> Collection[str]:
+    def get_keys(self, datatype: Optional[DataType] = None) -> Collection[str]:
+        """
+        If datatype=None, return all keys.
+        If datatype=<some datatype>, return all keys of specific datatype.
+        """
         raise NotImplementedError()
 
     def get_datatype(self, key: str) -> DataType:
@@ -153,7 +157,7 @@ class LogReader:
         """
         For 'scalar', return Dict[int, float]
         For 'text', return Dict[int, str]
-        For 'video_frame', return path to a MP4 video file
+        For 'video', return path to a MP4 video file
         For 'data', return Dict[int, Any]
         For 'metadata', return JSONSerializable
 

@@ -157,9 +157,9 @@ class VelToolOverWorld(CartesianController):
         xyz = action['xyz']
         rpy = action['rpy']
 
-        # Normalize angles to be < 180 deg.
-        rpy_const = max(1, *np.abs(rpy))
-        rpy /= rpy_const
+        # # Normalize angles to be < 180 deg.
+        # rpy_const = np.max(1, *np.abs(rpy))
+        # rpy /= rpy_const
 
         # Compute world-space velocity.
         world_to_tool = compose_matrix_world(angles=self._arm_info.angles)
@@ -169,7 +169,7 @@ class VelToolOverWorld(CartesianController):
 
         # Act.
         xyz, rpy = decompose_matrix_world(world_velocity)
-        self._c.act({'xyz': xyz, 'rpy': rpy * rpy_const})
+        self._c.act({'xyz': xyz, 'rpy': rpy })
 
     @property
     def pos_limits(self) -> Tuple[Vec3, Vec3]:
@@ -329,7 +329,7 @@ class GripperPosOverRobot(GripperController):
 # -------------------------------------------------------------- Whole robot --
 
 
-class GripperOrMove(Controller):
+class GripperAndMove(Controller):
     def __init__(
             self,
             robot_c: RobotController,
@@ -358,18 +358,16 @@ class GripperOrMove(Controller):
     def act(self, action):
         if action['robot'] != RobotAction.NOP.value:
             self._robot_c.act(action['robot'])
-            return
 
         if action['gripper'] != self._last_gripper_action:
             self._gripper_c.act(action['gripper'])
             self._last_gripper_action = action['gripper']
-            return
-
+            
         self._move_c.act(action['move'])
 
 
 """
-c = GripperOrMove(robot_c, move_c, gripper_c)
+c = GripperAndMove(robot_c, move_c, gripper_c)
 c = ClippedNormOverVerbatim(c, {'move': {'xyz': True, 'rpy': True}}) # <--- limits or default or per-item
 c = SplitVec3(c, {'move': {'xyz': ['x', 'y', 'z'], 'rpy': ['roll', 'pitch', 'yaw']}})
 c = Defaults(c, {'robot': {'action': RobotAction.NOP.value}, 'move': {'pitch': 0, 'yaw': 0}})

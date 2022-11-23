@@ -196,7 +196,7 @@ def build_swin_track(swin_track_type):
     assert swin_track_type in _config, 'Unknown SwinTrack type'
 
     model = build_swin_track_by_config(_config[swin_track_type])
-
+    # TODO: загружать не в pwd?
     weights_local = dfs.download_if_not_exists(_config[swin_track_type]['weights'])
     model.load_state_dict(torch.load(weights_local, map_location='cpu')['model'])
 

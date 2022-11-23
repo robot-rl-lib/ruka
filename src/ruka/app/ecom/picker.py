@@ -17,9 +17,17 @@ class Place(PickerCommand):
     pass
 
 
+@dataclass
+class HomeRobot(PickerCommand):
+    pass
+
+
 class EcomPicker:
     def handle_pick(self, cmd: Pick) -> Episode:
         raise NotImplementedError()
 
     def handle_place(self, cmd: Place) -> Episode:
+        raise NotImplementedError()
+
+    def handle_home(self, cmd: HomeRobot) -> Episode:
         raise NotImplementedError()

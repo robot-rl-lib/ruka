@@ -28,8 +28,14 @@ _lemon_pick_10_single_item_bakset = Scenario(
     commands=[ResetBasket(Basket([_lemon]))] + ([Pick(_lemon), Place()]) * 10,
 )
 
+_lemon_pick_1_single_item_bakset = Scenario(
+    name="lemon_pick_1_single_item_bakset",
+    commands=[ResetBasket(Basket([_lemon]))] + ([Pick(_lemon), Place()]) * 1,
+)
+
 _scenarios = {
     _lemon_pick_10_single_item_bakset.name: _lemon_pick_10_single_item_bakset,
+    _lemon_pick_1_single_item_bakset.name: _lemon_pick_1_single_item_bakset,
 }
 
 _dummy_scenario_registry = DummyScenarioRegistry()

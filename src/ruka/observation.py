@@ -16,6 +16,7 @@ class Observe(enum.Enum):
     SENSOR_PAD = 'sensor_pad'
     GRIPPER_OPEN = 'gripper_open'
     TRACKER_OBJECT_BBOX = 'tracker_object_bbox'
+    GOAL = 'goal'
 
 
 class Observation(dict):

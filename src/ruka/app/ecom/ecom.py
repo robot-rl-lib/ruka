@@ -1,6 +1,6 @@
 import numpy as np
 
-from typing import List
+from typing import List, Optional
 from dataclasses import dataclass
 
 
@@ -8,6 +8,7 @@ from dataclasses import dataclass
 class SKU:
     name: str
     reference_img: np.ndarray
+    uri: Optional[str] = None
 
 
 @dataclass

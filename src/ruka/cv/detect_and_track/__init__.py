@@ -1,12 +1,9 @@
 from .detect_and_track import DetectAndTrack
-from .object import Object
-from .one_shot_detector import OneShotDetector
-from .single_object_tracker import SingleObjectTracker
-
+from .target_object import TargetObject
+from .factory import create_generic_detect_and_track
 
 __all__ = [
     'DetectAndTrack',
-    'Object',
-    'OneShotDetector',
-    'SingleObjectTracker',
+    'TargetObject',
+    'create_generic_detect_and_track',
 ]

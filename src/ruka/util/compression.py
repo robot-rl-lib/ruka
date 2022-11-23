@@ -2,10 +2,9 @@ import cv2
 import numpy as np
 
 from dataclasses import dataclass
+from ruka.util.migrating import Migrating
 from typing import Any, Union
 from numpy.typing import NDArray
-
-from .array_semantics import RGB, Grayscale, Depth
 
 
 # --------------------------------------------------------------------- JPEG --
@@ -79,25 +78,26 @@ def png2depth(buf: NDArray[np.uint8]) -> NDArray[np.uint16]:
 
 
 @dataclass
-class CompressedRGB:
+class CompressedRGB(Migrating):
     buf_jpg: NDArray[np.uint8]
 
-    def __getstate__(self) -> Any:
-        return {'buf_jpg': self.buf_jpg}
 
-    def __setstate__(self, state: Any):
-        self.buf_jpg = state['buf_jpg']
+def compress_rgb_maybe(x: Any, heuristic: bool = False) -> Any:
+    if not heuristic:
+        return x
 
+    if not isinstance(x, np.ndarray):
+        return x
 
-def compress_rgb_maybe(x: Any) -> Any:
-    if isinstance(x, RGB):
-        return CompressedRGB(img2jpg(x.buf))
-    return x
+    if len(x.shape) != 3 or x.shape[2] != 3 or x.dtype != np.uint8:
+        return x
+
+    return CompressedRGB(img2jpg(x))
 
 
 def decompress_rgb_maybe(x: Any) -> Any:
     if isinstance(x, CompressedRGB):
-        return RGB(jpg2img(x.buf_jpg))
+        return jpg2img(x.buf_jpg)
     return x
 
 
@@ -105,25 +105,26 @@ def decompress_rgb_maybe(x: Any) -> Any:
 
 
 @dataclass
-class CompressedGrayscale:
+class CompressedGrayscale(Migrating):
     buf_jpg: NDArray[np.uint8]
 
-    def __getstate__(self) -> Any:
-        return {'buf_jpg': self.buf_jpg}
 
-    def __setstate__(self, state: Any):
-        self.buf_jpg = state['buf_jpg']
+def compress_grayscale_maybe(x: Any, heuristic: bool = False) -> Any:
+    if not heuristic:
+        return x
 
+    if not isinstance(x, np.ndarray):
+        return x
 
-def compress_grayscale_maybe(x: Any) -> Any:
-    if isinstance(x, Grayscale):
-        return CompressedGrayscale(img2jpg(x.buf))
-    return x
+    if len(x.shape) != 3 or x.shape[2] != 1 or x.dtype != np.uint8:
+        return x
+
+    return CompressedGrayscale(img2jpg(x))
 
 
 def decompress_grayscale_maybe(x: Any) -> Any:
     if isinstance(x, CompressedGrayscale):
-        return Grayscale(jpg2img(x.buf_jpg))
+        return jpg2img(x.buf_jpg)
     return x
 
 
@@ -131,35 +132,36 @@ def decompress_grayscale_maybe(x: Any) -> Any:
 
 
 @dataclass
-class CompressedDepth:
+class CompressedDepth(Migrating):
     buf_png: NDArray[np.uint8]
 
-    def __getstate__(self) -> Any:
-        return {'buf_png': self.buf_png}
 
-    def __setstate__(self, state: Any):
-        self.buf_png = state['buf_png']
+def compress_depth_maybe(x: Any, heuristic: bool = False) -> Any:
+    if not heuristic:
+        return x
 
+    if not isinstance(x, np.ndarray):
+        return x
 
-def compress_depth_maybe(x: Any) -> Any:
-    if isinstance(x, Depth):
-        return CompressedDepth(depth2png(x.buf))
-    return x
+    if len(x.shape) != 3 or x.shape[2] != 1 or x.dtype != np.uint16:
+        return x
+
+    return CompressedDepth(depth2png(x))
 
 
 def decompress_depth_maybe(x: Any) -> Any:
     if isinstance(x, CompressedDepth):
-        return Depth(png2depth(x.buf_png))
+        return png2depth(x.buf_png)
     return x
 
 
 # --------------------------------------------------------------- Everything --
 
 
-def compress_everything_maybe(x: Any) -> Any:
-    x = compress_rgb_maybe(x)
-    x = compress_grayscale_maybe(x)
-    x = compress_depth_maybe(x)
+def compress_everything_maybe(x: Any, heuristic: bool = False) -> Any:
+    x = compress_rgb_maybe(x, heuristic)
+    x = compress_grayscale_maybe(x, heuristic)
+    x = compress_depth_maybe(x, heuristic)
     return x
 
 

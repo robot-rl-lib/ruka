@@ -13,6 +13,7 @@ class RealsenseConfig:
     fps: int
     enable_color: bool = True
     enable_infrared: bool = False
+    warmup_frames: int = 30  # first captured frames are dark, skip them
 
 
 class RealsenseCamera(Camera):
@@ -21,6 +22,7 @@ class RealsenseCamera(Camera):
         self._height = config.height
         self._enable_color = config.enable_color
         self._enable_infrared = config.enable_infrared
+        self._warmup_frames = config.warmup_frames
 
         self._pipeline = rs.pipeline()
         self._config = rs.config()
@@ -32,6 +34,8 @@ class RealsenseCamera(Camera):
 
     def start(self):
         self._pipeline.start(self._config)
+        for _ in range(self._warmup_frames):
+            self.capture()
 
     def stop(self):
         self._pipeline.stop()

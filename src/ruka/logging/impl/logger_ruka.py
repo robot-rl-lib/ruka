@@ -45,7 +45,7 @@ class RukaLogger(Logger):
 
     def add_video_frame(self, key: str, value: ArrayLike, step_no: int = -1):
         step_no = self._get_step_no(step_no)
-        ref_step_no = self._set_datatype(key, DataType.VIDEO_FRAME)
+        ref_step_no = self._set_datatype(key, DataType.VIDEO)
 
         # Check dtype.
         if isinstance(value, np.ndarray) and value.dtype != np.uint8:
@@ -186,7 +186,7 @@ class RukaLogger(Logger):
         # video/{key}.json
         for key, value in self._data.items():
             # - Skip non-video.
-            if self._datatype[key] != DataType.VIDEO_FRAME:
+            if self._datatype[key] != DataType.VIDEO:
                 continue
 
             # - Paths.
@@ -223,6 +223,8 @@ class RukaLogger(Logger):
                         '-i', '*.jpg',
                         '-c:v', 'libx264',
                         '-pix_fmt', 'yuv420p',
+                        '-hide_banner',
+                        '-loglevel', 'error',
                         path_video
                     ],
                     cwd=tmpdir
@@ -282,7 +284,7 @@ class RukaLogReader(LogReader):
             if not key.endswith('.json'):
                 continue
             key = _strip_suffix(key, '.json')
-            self._datatype[key] = DataType.VIDEO_FRAME
+            self._datatype[key] = DataType.VIDEO
         for key in _ls_recursive(f'{local_path}/data'):
             key = _strip_suffix(key, '.pickle')
             self._datatype[key] = DataType.DATA
@@ -293,8 +295,13 @@ class RukaLogReader(LogReader):
         for key in self._metadata:
             self._datatype[key] = DataType.METADATA
 
-    def get_keys(self) -> Collection[str]:
-        return self._datatype.keys()
+    def get_keys(self, datatype: Optional[DataType] = None) -> Collection[str]:
+        if datatype is None:
+            return self._datatype.keys()
+        return set(
+            k for k in self._datatype.keys()
+            if self.get_datatype(k) == datatype
+        )
 
     def get_datatype(self, key: str) -> DataType:
         return self._datatype[key]
@@ -318,7 +325,7 @@ class RukaLogReader(LogReader):
             with open(f'{self._local_path}/text/{key}.json', 'rt') as f:
                 data = json.load(f)
             return {int(k): v for k, v in data.items()}
-        elif datatype == DataType.VIDEO_FRAME:
+        elif datatype == DataType.VIDEO:
             return f'{self._local_path}/video/{key}.mp4'
         elif datatype == DataType.DATA:
             with open(f'{self._local_path}/data/{key}.pickle', 'rb') as f:
@@ -332,7 +339,7 @@ class RukaLogReader(LogReader):
         return self._system['max_step_no']
 
     def get_video_info(self, key: str) -> VideoInfo:
-        if self._datatype[key] != DataType.VIDEO_FRAME:
+        if self._datatype[key] != DataType.VIDEO:
             raise ValueError(f'key {key} is not a video')
         with open(f'{self._local_path}/video/{key}.json', 'rt') as f:
             info = json.load(f)

@@ -48,13 +48,13 @@ def test_ruka_logger():
         assert r.get_value('t') == {1000+i: f'cos={np.cos(i)}' for i in range(200)}
 
         # Video (monochrome).
-        assert r.get_datatype('v/1') == DataType.VIDEO_FRAME
+        assert r.get_datatype('v/1') == DataType.VIDEO
         assert os.path.isfile(r.get_value('v/1'))
         assert r.get_video_info('v/1') == VideoInfo(
             height=64, width=128, channels=1, fps=20)
 
         # Video (RGB).
-        assert r.get_datatype('v/3') == DataType.VIDEO_FRAME
+        assert r.get_datatype('v/3') == DataType.VIDEO
         assert os.path.isfile(r.get_value('v/3'))
         assert r.get_video_info('v/1') == VideoInfo(
             height=64, width=128, channels=1, fps=20)

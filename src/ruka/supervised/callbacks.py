@@ -64,7 +64,7 @@ class ADPPHCallback(Callback):
         
         for _ in range(self.for_episodes):
             ep = next(self.episode_iterator)
-            elapsed_time += np.sum([info['transition_time'] for info in ep.infos])
+            elapsed_time += np.sum([info['timestamp_finish_step'] - info['timestamp_start_step'] for info in ep.infos])
             ep_times.append(len(ep.actions))
             successess.append(ep.infos[-1]['is_success'])
             if ep.infos[-1]['is_success']:

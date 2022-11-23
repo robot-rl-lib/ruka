@@ -15,11 +15,12 @@ StepInfo = namedtuple('StepInfo', ('observation', 'reward', 'done', 'info'))
 
 EnvInfo = Dict[str, Any]
 """ EnvInfo must contain next keys:
-        - transition_time - how much time since prev step passed
-        - is_time_limit - if episode was terminated by the time limit
+        - timestamp_start_step: float
+        - timestamp_finish_step: float
+        - is_time_limit: bool - if episode was terminated by the time limit
 
     Optional standartized:
-        - is_success - flag for success
+        - is_success: bool - flag for success
 """
 
 class Env:

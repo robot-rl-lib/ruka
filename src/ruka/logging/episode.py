@@ -5,6 +5,7 @@ import traceback
 import threading
 
 from dataclasses import dataclass
+from functools import partial
 from typing import Optional
 from concurrent.futures import ProcessPoolExecutor, Future
 from ruka.environments.common.env import Episode
@@ -34,6 +35,7 @@ class EpisodeLogParams:
     visualize: bool = True
     save_as_data: bool = True
     compress: bool = True
+    compress_heuristic: bool = False
 
 
 def log_episode(
@@ -113,7 +115,7 @@ def _log_episode(logger: Logger, episode: Episode, params: EpisodeLogParams):
 
     # Visualize.
     if params.visualize:
-        for i in range(len(episode) + 1):
+        for i in range(len(episode.observations)):
             logger.step(i)
             visualize_nested_dict(logger, episode.observations[i], 'episode/observation', auto=True)
             if i < len(episode):
@@ -127,12 +129,14 @@ def _log_episode(logger: Logger, episode: Episode, params: EpisodeLogParams):
     if params.save_as_data:
         # - Compression.
         if params.compress:
+            compress_fn = partial(
+                compress_everything_maybe, heuristic=params.compress_heuristic)
             episode.observations = [
-                nd.map_inplace(compress_everything_maybe, obs)
+                nd.map_inplace(compress_fn, obs)
                 for obs in episode.observations
             ]
             episode.infos = [
-                nd.map_inplace(compress_everything_maybe, info)
+                nd.map_inplace(compress_fn, info)
                 for info in episode.infos
             ]
 

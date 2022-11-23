@@ -1,38 +1,41 @@
 import os
-import pickle
+import tempfile
 import json
 import warnings
 from typing import List, Dict
+from ruka.logging.episode import load_episode
+import ruka_os.distributed_fs_v2 as dfs
 
-def label_local_from_infos(paths: List[str], save_to: str) -> Dict[str, Dict[str, float]]:
+def label_episode_from_infos(path: str):
     """ Temporary function that sets general interface for labeling: 
-        accepts local episode paths (maybe episode DFS IDs later in other variations), 
-        and handles saving: this label function saves json locally, some other might push
-        labels from toloka or whatever to dfs directly
+        accepts local episode path on DFS, and handles saving: 
+        this label function saves json locally and then pushes it, 
+        some other might push paths to toloka queue or whatever. 
+        So it is this function's responsibility to publish labels to DFS.
+
+        saves labels in json format as 'episode_path' + '.json' in the same dir as path.
 
         Labeling functions work with fields that cannot be labeled automaticaly in general
+        
+        args:
+            - path - path to a episode on DFS
 
-        paths - local path to files
-        save_to - where to locally save json
+        label fields:
+            - success rate : bool
 
-        dict:
-            episode_path:
-                is_success: bool
-                episide_len: int
     """
-    for path in paths:
-        with open(path, 'rb') as f:
-            episode = pickle.load(f)
-
-        name = os.path.basename(path) + '.json'
-        save_path = os.path.join(save_to, name)
-        if os.path.exists(save_path):
-            warnings.warn(
-                f"skipping episode '{os.path.basename(path)}' since it is already labeled"
-                )
-            continue
-
-        episode_labels = {}
-        episode_labels['is_success'] = episode.infos[-1]['is_success']
-        with open(save_path, 'w') as f:
+    save_path = path + '.json'
+    
+    if dfs.exists(save_path):
+        warnings.warn(
+            f"skipping episode '{save_path}' since it is already labeled"
+            )
+        return
+    episode = load_episode(path)
+    episode_labels = {}
+    episode_labels['is_success'] = episode.infos[-1]['is_success']
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmppath = os.path.join(tmpdir, os.path.basename(save_path))
+        with open(tmppath, 'w') as f:
             json.dump(episode_labels, f)
+        dfs.upload(tmppath, save_path)

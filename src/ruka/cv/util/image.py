@@ -1,12 +1,16 @@
 import numpy as np
+import cv2
+from numpy.typing import NDArray
+from typing import Union, Tuple
+from .bounding_box import AxisAlignedBBox, OrientedBBox
 
 
 def cut_box_and_make_square(image, box, expand_k=1.0, min_side=None):
-    half_side = int(max(box[2] - box[0], box[3] - box[1]) * expand_k / 2)
+    c_x, c_y, w, h = box.to_cxcywh().squeeze().astype(int)
+    half_side = int(max(w, h) * expand_k / 2)
     if min_side is not None:
         half_side = max(half_side, min_side // 2)
 
-    c_x, c_y = (box[0] + box[2]) // 2, (box[1] + box[3]) // 2
     x_min, y_min = max(0, c_x - half_side), max(0, c_y - half_side)
     x_max, y_max = min(image.shape[1], c_x + half_side + 1), min(image.shape[0], c_y + half_side + 1)
 
@@ -26,3 +30,36 @@ def cut_box_and_make_square(image, box, expand_k=1.0, min_side=None):
     assert result.shape[0] == result.shape[1]
 
     return result, (x_min, y_min)
+
+
+def plot_bounding_box(
+    image: NDArray[np.uint8],
+    box: Union[AxisAlignedBBox, OrientedBBox],
+    color: Tuple[int, int, int],
+    thickness: int) -> NDArray[np.uint8]:
+
+    '''
+    Draw bounding boxes on an image. Supports multiple boxes.
+
+    Args:
+        image: RGB image to draw on. Will be copied before drawing.
+        box: bounding box(es) to draw
+        color: tuple(R, G, B), each channel in range [0, 255]
+        thickness: line thickness
+
+    Returns:
+        image (NDArray[np.uint8]): image with bounding bow drawn
+    '''
+
+    result = image.copy()
+    for i in range(box.n_boxes):
+        corners = box[i].corners.astype(int)
+        for c in range(corners.shape[0]):
+            result = cv2.line(
+                result,
+                tuple(corners[c].astype(int)),
+                tuple(corners[(c + 1) % corners.shape[0]].astype(int)),
+                color,
+                thickness)
+
+    return result

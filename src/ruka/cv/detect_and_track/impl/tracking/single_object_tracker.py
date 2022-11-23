@@ -1,17 +1,17 @@
 import numpy as np
 from ruka.pytorch_util import TorchAware
-from ruka.cv.util import OrientedBoundingBox
+from ruka.cv.util import OrientedBBox
 from numpy.typing import NDArray
 
 
 class SingleObjectTracker(TorchAware):
-    def initialize(self, image: NDArray[np.uint8], box: OrientedBoundingBox):
+    def initialize(self, image: NDArray[np.uint8], box: OrientedBBox):
         """
         Initialize tracker with target
 
         Args:
             image (np.array): image in RGB format
-            box (OrientedBoundingBox): target object bounding box
+            box (OrientedBBox): target object bounding box
 
         Returns:
             None
@@ -22,17 +22,17 @@ class SingleObjectTracker(TorchAware):
     def find(
         self,
         image: NDArray[np.uint8],
-        box: OrientedBoundingBox = None) -> OrientedBoundingBox:
+        box: OrientedBBox = None) -> OrientedBBox:
 
         """
         Perform tracking on an image
 
         Args:
             image (np.array): image in RGB format
-            box (OrientedBoundingBox): optional search bbox
+            box (OrientedBBox): optional search bbox
 
         Returns:
-            box (OrientedBoundingBox): target object bounding box
+            box (OrientedBBox): target object bounding box
         """
 
         raise NotImplementedError()

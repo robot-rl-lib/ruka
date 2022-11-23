@@ -1,4 +1,5 @@
-from ruka.app.ecom.picker import EcomPicker, Pick, Place
+import time
+from ruka.app.ecom.picker import EcomPicker, HomeRobot, Pick, Place
 from ruka.environments.common.env import Env, Episode, Policy
 from ruka.environments.common.path_iterators import collect_episodes
 
@@ -17,6 +18,7 @@ class EcomPickerImpl(EcomPicker):
         # self._place_policy = place_policy
 
     def handle_pick(self, cmd: Pick) -> Episode:
+        self._env.set_goal({"ref_img": cmd.item.reference_img})
         ep_iterator = collect_episodes(self._env, self._pick_policy)
         return next(ep_iterator)
 
@@ -24,3 +26,12 @@ class EcomPickerImpl(EcomPicker):
         # TODO: implement
         print("Implement place")
         return Episode()
+
+    def handle_home(self, cmd: HomeRobot) -> Episode:
+        reset_start = time.time()
+        self._env.reset()
+        reset_end = time.time()
+
+        ep = Episode()
+        ep.meta['episode_time'] = reset_end - reset_start
+        return ep

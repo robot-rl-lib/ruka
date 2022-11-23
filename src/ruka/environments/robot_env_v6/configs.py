@@ -15,12 +15,13 @@ class Observe(enum.Enum):
     HEIGHT = 'height'
     TIMESTEP = 'timestep'
     TRANSITION_TIME = 'transition_time'
+    GOAL = 'goal'
 
 @dataclasses.dataclass
 class BaseDataclass:
     def __getitem__(self, item):
         return getattr(self, item)
-    
+
 
 class ObjectDataset(enum.Enum):
     RANDOM_URDFS = 'random_urdfs'
@@ -61,7 +62,7 @@ class EnvironmentConfig(BaseDataclass):
         camera_info: CameraInfoConfig
         transform: CameraTransformConfig
         randomize: CameraRandomizationConfig
-            
+
     @dataclasses.dataclass
     class RobotConfig(BaseDataclass):
         model_path: str
@@ -71,7 +72,7 @@ class EnvironmentConfig(BaseDataclass):
         max_translation: float
         max_yaw_rotation: float
         max_force: float
-    
+
     @dataclasses.dataclass
     class SceneConfig(BaseDataclass):
         extent: float
@@ -88,7 +89,7 @@ class EnvironmentConfig(BaseDataclass):
         time_penalty: float
         terminal_reward_wrong: float
         table_clearing: bool
-            
+
     @dataclasses.dataclass
     class CurriculumConfig(BaseDataclass):
         init_lambda: float

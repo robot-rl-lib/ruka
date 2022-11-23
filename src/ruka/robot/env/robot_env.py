@@ -15,7 +15,6 @@ class RealRobotEnv(gym.Env):
         self.action_space = gym.spaces.Box(-1, 1, shape=(5,), dtype=np.float32)
         self.observation_space = robot.observation_space
 
-
     def reset(self):
         self._broken = False
         self._reward.reset()

@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 from ruka.app.ecom.ecom import Command
 
 
@@ -7,6 +7,7 @@ from ruka.app.ecom.ecom import Command
 class Scenario:
     name: str
     commands: List[Command]
+    uri: Optional[str] = None
 
     def __str__(self) -> str:
         return f"{self.name} scenario"

@@ -1,6 +1,7 @@
 import numpy as np
 import torch.nn as nn
 import torch
+import copy
 
 def identity(x):
     return x
@@ -315,6 +316,18 @@ def numpy_tree_to_torch(dct):
     else:
         return from_numpy(dct)
         
+
+def transform_to_pytorch_dims(batch, img_keys):
+    batch = copy.deepcopy(batch)
+    for key in img_keys:
+        axes = tuple(range(len(batch[key].shape)))
+        if torch.is_tensor(batch[key]):
+            batch[key] = torch.permute(batch[key], (*axes[:-3], axes[-1], axes[-3], axes[-2])) # 2 0 1
+        else:
+            batch[key] = np.transpose(batch[key], axes=(*axes[:-3], axes[-1], axes[-3], axes[-2])) # 2 0 1
+
+    return batch
+
 
 
 class TorchAware:
