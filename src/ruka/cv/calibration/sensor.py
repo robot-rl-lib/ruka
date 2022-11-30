@@ -20,6 +20,13 @@ class Sensor:
 
         return np.stack([x, y, z]).T
 
+    def project(self, pts):
+        x, y, z = pts[:, 0].copy(), pts[:, 1].copy(), pts[:, 2]
+        x = ((x / z) * self.params[self.FX_INDEX]) + self.params[self.PPX_INDEX]
+        y = ((y / z) * self.params[self.FY_INDEX]) + self.params[self.PPY_INDEX]
+
+        return np.vstack([x, y]).T
+
     def intrinsics_as_matrix(self):
         return np.array([
             [self.params[self.FX_INDEX], 0, self.params[self.PPX_INDEX]],

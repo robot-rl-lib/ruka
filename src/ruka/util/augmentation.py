@@ -4,6 +4,8 @@ def crop_augment(obs_batch, to_crop, crop_size):
     """
     random crops [H, W, C] images
     """
+    if not to_crop:
+        return obs_batch
     cropped = {}
     *bs, h, w, c = obs_batch[to_crop[0]].shape
     crop_max = h - crop_size + 1

@@ -132,7 +132,7 @@ class DFSObjectLoader:
         return yaml.safe_load(content)
 
     def _load_jpeg(self, content) -> np.ndarray:
-        return jpg2img(np.fromstring(content, np.uint8))
+        return jpg2img(content)
 
     def _load_uri_content(self, uri: str):
         with tempfile.NamedTemporaryFile() as tmp_f:

@@ -10,7 +10,7 @@ from numpy.typing import NDArray
 # --------------------------------------------------------------------- JPEG --
 
 
-def img2jpg(img_hwc: NDArray[np.uint8], quality: int = 95) -> NDArray[np.uint8]:
+def img2jpg(img_hwc: NDArray[np.uint8], quality: int = 95) -> bytes:
     """
     Encode input image RGB or GRAY with jpeg codec.
     """
@@ -23,15 +23,15 @@ def img2jpg(img_hwc: NDArray[np.uint8], quality: int = 95) -> NDArray[np.uint8]:
 
     encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), quality]
     buf = cv2.imencode('.jpg', img_hwc, encode_param)[1]
-    return buf
+    return buf.tobytes()
 
 
-def jpg2img(buf: NDArray[np.uint8]) -> NDArray[np.uint8]:
+def jpg2img(buf: bytes) -> NDArray[np.uint8]:
     """
     Decode img RGB or GRAY from jpg buffer.
     Return HWC image.
     """
-    img = cv2.imdecode(buf, cv2.IMREAD_ANYCOLOR)
+    img = cv2.imdecode(np.frombuffer(buf, dtype=np.uint8), cv2.IMREAD_ANYCOLOR)
     if len(img.shape) == 2:
         # hw -> hwc for grayscale
         img = img[:,:, None]
@@ -47,7 +47,7 @@ def jpg2img(buf: NDArray[np.uint8]) -> NDArray[np.uint8]:
 def depth2png(
         depth_hwc: NDArray[Union[np.uint16, np.float32, np.float16]],
         quality: int = 1
-    ) -> NDArray[np.uint8]:
+    ) -> bytes:
     """
     Encode 16bit depth image with PNG codec.
 
@@ -62,14 +62,14 @@ def depth2png(
     depth_clip = np.clip(depth_hwc, 0, MAX_DEPTH).astype(np.uint16)
     encode_param = [int(cv2.IMWRITE_PNG_COMPRESSION), quality]
     buf = cv2.imencode('.png', depth_clip, encode_param)[1]
-    return buf
+    return buf.tobytes()
 
 
-def png2depth(buf: NDArray[np.uint8]) -> NDArray[np.uint16]:
+def png2depth(buf: bytes) -> NDArray[np.uint16]:
     """
     Decode 16bit depth image from PNG.
     """
-    depth = cv2.imdecode(buf, cv2.IMREAD_ANYDEPTH)
+    depth = cv2.imdecode(np.frombuffer(buf, dtype=np.uint8), cv2.IMREAD_ANYDEPTH)
     depth = depth[:,:, None]
     return depth
 
@@ -92,12 +92,12 @@ def compress_rgb_maybe(x: Any, heuristic: bool = False) -> Any:
     if len(x.shape) != 3 or x.shape[2] != 3 or x.dtype != np.uint8:
         return x
 
-    return CompressedRGB(img2jpg(x))
+    return CompressedRGB(np.frombuffer(img2jpg(x), dtype=np.uint8))
 
 
 def decompress_rgb_maybe(x: Any) -> Any:
     if isinstance(x, CompressedRGB):
-        return jpg2img(x.buf_jpg)
+        return jpg2img(x.buf_jpg.tobytes())
     return x
 
 
@@ -119,12 +119,12 @@ def compress_grayscale_maybe(x: Any, heuristic: bool = False) -> Any:
     if len(x.shape) != 3 or x.shape[2] != 1 or x.dtype != np.uint8:
         return x
 
-    return CompressedGrayscale(img2jpg(x))
+    return CompressedGrayscale(np.frombuffer(img2jpg(x), dtype=np.uint8))
 
 
 def decompress_grayscale_maybe(x: Any) -> Any:
     if isinstance(x, CompressedGrayscale):
-        return jpg2img(x.buf_jpg)
+        return jpg2img(x.buf_jpg.tobytes())
     return x
 
 
@@ -146,12 +146,12 @@ def compress_depth_maybe(x: Any, heuristic: bool = False) -> Any:
     if len(x.shape) != 3 or x.shape[2] != 1 or x.dtype != np.uint16:
         return x
 
-    return CompressedDepth(depth2png(x))
+    return CompressedDepth(np.frombuffer(depth2png(x), dtype=np.uint8))
 
 
 def decompress_depth_maybe(x: Any) -> Any:
     if isinstance(x, CompressedDepth):
-        return png2depth(x.buf_png)
+        return png2depth(x.buf_png.tobytes())
     return x
 
 

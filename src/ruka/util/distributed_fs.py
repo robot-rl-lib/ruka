@@ -1,12 +1,15 @@
 import datetime
 import os
+import pickle
 import pytz
+import tempfile
 
 from filelock import FileLock
 from ruka_os import distributed_fs as dfs_v1, in_cloud, DFS_CWD
 from ruka_os import distributed_fs_v2 as dfs_v2
 from ruka_os.globals import RUKA_LOCAL_STORAGE
-from typing import List
+from typing import List, Any
+from types import ModuleType
 
 dfs = dfs_v1
 
@@ -58,6 +61,37 @@ def upload_maybe(local_path, wait=True):
         upload(local_path, wait=wait)
 
 
+def upload_pickle(obj: Any, remote_path: str):
+    '''
+    Pickles an object to DFS
+
+    Args:
+        obj: object to be pickled
+        remote_path (str): path on DFS to save pickled object to
+            should have .pickle extension
+    '''
+
+    assert remote_path.endswith('.pickle')
+
+    with tempfile.NamedTemporaryFile() as f:
+        pickle.dump(obj, f)
+        f.flush()
+        dfs.upload(f.name, remote_path)
+
+
+def download_pickle(remote_path: str) -> Any:
+    '''
+    Pickles an object from DFS
+
+    Args:
+        remote_path (str): path on DFS to pickle from
+    '''
+
+    local_path = cached_download(remote_path)
+    with open(local_path, 'rb') as f:
+        return pickle.load(f)
+
+
 def download(remote_path, local_path):
     return dfs.download(remote_path, local_path)
 
@@ -80,8 +114,11 @@ def download_if_not_exists(remote_path, local_path=None):
     return local_path
 
 
-def _get_modification_time(local_path: str) -> datetime.datetime:
-    time = datetime.datetime.fromtimestamp(os.path.getmtime(local_path))
+def _get_download_time(local_path: str) -> datetime.datetime:
+    if os.path.isdir(local_path):
+        time = datetime.datetime.fromtimestamp(os.path.getctime(local_path))
+    else:
+        time = datetime.datetime.fromtimestamp(os.path.getmtime(local_path))
     time = time.replace(tzinfo=pytz.UTC)
     return time
 
@@ -114,31 +151,34 @@ def _lock_cache_file(remote_path: str) -> str:
     return FileLock(path)
 
 
-def cached_download(remote_path: str):
+def cached_download(remote_path: str, other_dfs: ModuleType = None):
     '''
     Download single file.
     If local path exists and is modified after remote_path, does nothing.
 
     Args:
         remote_path (str): dfs path to the file
+        other_dfs: use other, not default dfs module 
 
     Returns:
         local_path (str): local path, where the file was downloaded to
     '''
-
+    _dfs = other_dfs or dfs
     with _lock_cache_file(remote_path):
         local_path = _get_cache_path(remote_path)
         do_download = False
 
         if not os.path.exists(local_path):
-            os.makedirs(os.path.dirname(local_path))
+            local_path_folder = os.path.dirname(local_path)
+            if not os.path.exists(local_path_folder):
+                os.makedirs(os.path.dirname(local_path))
             do_download = True
-        elif dfs.stat(remote_path).modification_time > _get_modification_time(local_path):
+        elif _dfs.stat(remote_path).modification_time > _get_download_time(local_path):
             do_download = True
 
         if do_download:
             print(f'Downloading {remote_path}...')
-            dfs.download(remote_path, local_path)
+            _dfs.download(remote_path, local_path)
 
         return local_path
 
@@ -162,7 +202,7 @@ def cached_download_and_unpack(remote_path: str) -> str:
         if not os.path.exists(local_path):
             os.makedirs(local_path)
             do_download = True
-        elif dfs.stat(remote_path).modification_time > _get_modification_time(local_path):
+        elif dfs.stat(remote_path).modification_time > _get_download_time(local_path):
             do_download = True
 
         if do_download:

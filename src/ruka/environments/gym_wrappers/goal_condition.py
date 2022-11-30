@@ -20,6 +20,9 @@ class GoalCondition(gym.ObservationWrapper):
         observation.update(self._goal)
         return observation
 
+    def get_observation(self):
+        return self.observation(self.env.get_observation())
+
     def set_goal(self, goal: NestedDict):
         # TODO: add check of condition shape == condition_space
         self._goal = goal

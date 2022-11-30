@@ -1,5 +1,5 @@
 import collections
-from typing import Dict, Iterator
+from typing import Dict, Iterator, Callable, Optional
 import os
 import pathlib
 
@@ -11,6 +11,7 @@ import ruka.util.tensorboard as tb
 import ruka.util.distributed_fs as dfs
 from ruka.environments.common.env import Episode, TorchAware, Policy
 from ruka.types import Dictator
+from ruka.vis.batch_viz import viz_batch_img, get_batch_statistics
 
 """ Classes that return stateful functions that log something on call
 """
@@ -194,3 +195,123 @@ class SaveCallback(Callback):
 class SavePolicy(SaveCallback):
     def __init__(self, policy: Policy, every: int, save_to: str = ''):
         super().__init__(policy, every, save_to, prefix='policy_')
+
+
+class VisBatchCallback(Callback):
+    
+    def __init__(
+        self, 
+        every: int,
+        nbins: int = 20,
+        process_act_fn: Callable = lambda x: x,
+        process_bbox_fn: Optional[Callable] = None,
+        process_point_fn: Optional[Callable] = None,
+        process_pos_fn: Optional[Callable] = None,
+        process_gripper_fn: Optional[Callable] = None,
+        resize: int = 256,
+        img_num: int = 9,
+        obs_k: str = 'observation',
+        act_k: str = 'action',
+        img_k: str = 'rgb',
+        gripper_k: str = 'gripper',
+        pos_k: str = 'robot_pos',
+        bbox_k: str = 'tracker_object_bbox',
+        point_k: str = 'bb_center',
+        prefix: str = ''
+        ):
+        self._every = every
+
+        self.nbins = nbins
+        self.process_act_fn = process_act_fn
+        self.process_bbox_fn = process_bbox_fn
+        self.process_point_fn = process_point_fn
+        self.process_pos_fn = process_pos_fn
+        self.process_gripper_fn = process_gripper_fn
+        self.resize = resize
+        self.img_num = img_num
+        self.obs_k = obs_k
+        self.act_k = act_k
+        self.img_k = img_k
+        self.gripper_k = gripper_k
+        self.pos_k = pos_k
+        self.bbox_k = bbox_k
+        self.point_k = point_k
+
+        self.prefix = prefix
+
+    def __call__(
+        self, 
+        step: int,  
+        batch: Dict[str, Dictator],
+        config
+        ):    
+        if ((step + 1) % self._every) != 0:
+            return
+
+        img = viz_batch_img(
+            batch, 
+            process_act_fn=self.process_act_fn,
+            process_bbox_fn=self.process_bbox_fn,
+            process_point_fn=self.process_point_fn,
+            process_pos_fn=self.process_pos_fn,
+            process_gripper_fn=self.process_gripper_fn,
+            resize=self.resize,
+            img_num=self.img_num,
+            obs_k=self.obs_k,
+            act_k=self.act_k,
+            img_k=self.img_k,
+            gripper_k=self.gripper_k,
+            pos_k=self.pos_k,
+            bbox_k=self.bbox_k,
+            point_k=self.point_k,
+)
+        tb.add_image('viz_batch_img', img.transpose((2,0,1)))
+        stats = get_batch_statistics(
+            batch, 
+            obs_k=self.obs_k,
+            act_k=self.act_k,
+            pos_k=self.pos_k,
+            nbins=self.nbins,
+            )
+        tb.step(step)
+        for k, v in stats.items():
+            k = self.prefix + k
+            if k.endswith('_hist'):
+                tb.add_histogram(k, v)
+            elif k.endswith('_img'):
+                tb.add_image(k, v, dataformats='HW')
+            else:
+                tb.scalar(k, v)
+
+class TrainStatsCallback(Callback):
+    def __init__(self, model: nn.Module, every: int, norm_type: float = 2.0, prefix: str = ''):
+        self._model = model
+        self._every = every
+        self._norm_type = norm_type
+        self.prefix = prefix
+
+    def _get_lr(self, config):
+        for param_group in config.optimizer.param_groups:
+            return param_group['lr']
+
+    def __call__(self, step: int, batch: Dict[str, Dictator], config):
+
+        if ((step + 1) % self._every) != 0:
+            return
+        parameters = self._model.parameters()
+        if isinstance(parameters, torch.Tensor):
+            parameters = [parameters]
+        grads = [p.grad for p in parameters if p.grad is not None]
+        norm_type = float(self._norm_type)
+        if len(grads) == 0:
+            return torch.tensor(0.)
+        device = grads[0].device
+        if norm_type == torch._six.inf:
+            norms = [g.detach().abs().max().to(device) for g in grads]
+            total_norm = norms[0] if len(norms) == 1 else torch.max(torch.stack(norms))
+        else:
+            total_norm = torch.norm(torch.stack([torch.norm(g.detach(), norm_type).to(device) for g in grads]), norm_type)
+        
+        tb.step(step)
+        tb.scalar(self.prefix + 'gradnorm', total_norm.cpu().detach().numpy())
+        tb.scalar(self.prefix + 'lr', self._get_lr(config))

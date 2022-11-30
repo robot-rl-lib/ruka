@@ -287,7 +287,7 @@ def load_object(state: State) -> Migrating:
     Load an object from state. Like pickle.loads()
     """
     validate_state(state)
-    module = __import__(state['class']['module'])
+    module = __import__(state['class']['module'], fromlist=[None])
     cls = getattr(module, state['class']['name'])
     obj = cls.__new__(cls)
     obj.__setstate__(state)

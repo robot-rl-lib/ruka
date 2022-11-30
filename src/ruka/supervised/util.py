@@ -8,6 +8,7 @@ import ruka.pytorch_util as ptu
 import ruka.util.distributed_fs as dfs
 import torch
 from ruka.environments.common.env import Episode
+import ruka.util.tensorboard as tb
 
 def filter_successes(it: Iterator[Episode]):
     while True:
@@ -79,3 +80,17 @@ def load_checkpoint(
     print(f"Loaded model from '{latest_checkpoint}'")
     
     return start_from
+
+
+def tb_data_size(episodes, prefix=''):
+    transitions = None
+    for s in [0, 1000]:
+        tb.step(s)
+        tb.scalar(f'data/{prefix}_ep_num', len(episodes))
+        if episodes and hasattr(episodes[0], 'actions'):
+            transitions = np.sum([len(ep.actions) for ep in episodes])
+            tb.scalar(f'data/{prefix}_transition_num', transitions)
+
+    print(f"{prefix} episodes:", len(episodes))
+    if transitions:
+        print(f"{prefix} transitions:", transitions)

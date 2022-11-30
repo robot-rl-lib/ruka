@@ -3,6 +3,8 @@ from ruka.app.ecom.picker import EcomPicker, HomeRobot, Pick, PickerCommand, Pla
 from ruka.app.ecom.scenario import Scenario
 from ruka.app.ecom.world import ResetBasket, World, WorldCommand
 from ruka.environments.common.env import Episode
+from ruka.robot.robot import RobotError, RobotRecoverableError
+from ruka.robot.xarm import XArmControllerRecoverableError
 
 
 def handle_world_command(world: World, cmd: WorldCommand) -> Episode:
@@ -41,13 +43,18 @@ def perform_scenario(
     #   dst: ?
     # and rewrite this function into explicit logic
 
-    for cmd in scenario.commands:
+    picker.handle_home(HomeRobot())
+
+    for ind, cmd in enumerate(scenario.commands):
         if isinstance(cmd, WorldCommand):
             handle_world_command(world, cmd)
         elif isinstance(cmd, PickerCommand):
 
             # here we can handle picker failures
             if isinstance(cmd, Pick):
+
+                # TODO: handle RobotRecoverableError and RobotUnrecoverableError
+                print(f'Cmd: {ind} pick: {cmd.item.name}')
                 episode = picker.handle_pick(cmd)
                 fill_meta(episode)
 

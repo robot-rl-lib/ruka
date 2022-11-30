@@ -18,8 +18,21 @@ def ascii_hists(
         bin_len (int): bin length in chars
 
     Returns:
-        str: ascii representation
+        str: ascii representation, returns empty string
+             if all values lists are empty
     """
+    # filtering not empty list of values
+    not_empty_values = [
+        (vals_items, label)
+        for vals_items, label
+        in zip(values, labels)
+        if vals_items != []
+    ]
+    if not not_empty_values:
+        return ""
+
+    values, labels = zip(*not_empty_values)
+
     minval = min([min(item_vals) for item_vals in values])
     maxval = max([max(item_vals) for item_vals in values])
     hists = [

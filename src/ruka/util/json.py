@@ -121,10 +121,10 @@ def xdumpr(obj: Any, remote_path: str):
     """
     xdumpr = e[x]tended [dump] to [r]emote DFS
     """
-    with tempfile.TemporaryDir() as tmpdir:
+    with tempfile.TemporaryDirectory() as tmpdir:
         local_path = f'{tmpdir}/file'
         with open(local_path, 'wt') as f:
-            json.dump(xdumpj(obj))
+            json.dump(xdumpj(obj), f)
         dfs.upload(local_path, remote_path)
 
 
@@ -132,7 +132,7 @@ def xloadr(remote_path: str) -> Any:
     """
     xloadr = e[x]tended [load] from [r]emote DFS
     """
-    with tempfile.TemporaryDir() as tmpdir:
+    with tempfile.TemporaryDirectory() as tmpdir:
         local_path = f'{tmpdir}/file'
         dfs.download(remote_path, local_path)
         with open(local_path, 'rt') as f:

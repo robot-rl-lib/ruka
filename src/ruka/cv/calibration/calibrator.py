@@ -1,16 +1,26 @@
-from ruka.robot.xarm_ import XArmPosControlled, ControlMode
-import time
-import numpy as np
 import cv2
-from tqdm.auto import tqdm
-from scipy.optimize import least_squares
-from ruka.cv.calibration.loss import EstimateBoardPositionsLoss, EstimateIntrinsicsLoss, EstimateGlobalBoardPositionLoss
-from ruka.cv.calibration import Checkerboard, Sensor, Transformation
 import dataclasses
+import numpy as np
 import open3d as o3d
-from ruka.util.x3d import compose_matrix_world
-from typing import Tuple
+import time
+
 from ruka.robot.realsense import RealsenseCamera
+from ruka.robot.xarm import XArmPosControlled, ControlMode
+from ruka.util.x3d import compose_matrix_world
+from scipy.optimize import least_squares
+from tqdm.auto import tqdm
+from typing import Tuple
+
+from .calibration import RGBDCameraCalibration, RobotCalibration
+from .checkerboard import Checkerboard
+from .loss import (
+    EstimateBoardPositionsLoss,
+    EstimateIntrinsicsLoss,
+    EstimateGlobalBoardPositionLoss,
+    EstimateColorParametersLoss,
+)
+from .sensor import Sensor
+from .transformation import Transformation
 
 
 @dataclasses.dataclass
@@ -65,11 +75,11 @@ class Calibrator:
             f = camera.capture()
             if frames_cnt % self._config.save_every_frames == 0:
                 pos = np.array(robot_controller.pos + robot_controller.angles)
-                pos[-2:] *= -1 # TODO: remove when contoller follows conventions
 
                 frames.append(dict({
-                    'depth': f[:, :, 0].astype(np.uint16),
-                    'infrared': f[:, :, 1].astype(np.uint8),
+                    'rgb': f[:, :, :3].astype(np.uint8),
+                    'depth': f[:, :, 3].astype(np.uint16),
+                    'infrared': f[:, :, 4].astype(np.uint8),
                     'pos': pos,
                 }))
             frames_cnt += 1
@@ -85,13 +95,15 @@ class Calibrator:
                 robot_controller.set_pos(target[:3], target[3:])
                 while not robot_controller.is_target_reached():
                     collect_frame()
-            except:
+            except Exception as e:
+                print('Exception while collecting frames:', e)
+
                 robot_controller.go_home()
                 robot_controller.steady(ControlMode.POS)
 
         return frames
 
-    def calibrate(self, frames):
+    def calibrate(self, frames) -> RobotCalibration:
         """
         Calibrates intrinsic and extrinsic camera parameters
 
@@ -99,11 +111,10 @@ class Calibrator:
             frames: frames collected with 'collect_frames' method
 
         Returns:
-            intrinsics (np.array): camera intrinsic calibration matrix
-            camera_to_tcp (np.array): calibrated transformation matrix from camera system to TCP system
+            calibration (RobotCalibration): all calibrated parameters
         """
 
-        points, depths, positions = self._extract_data_for_calibration(frames)
+        points, color_points, depths, positions = self._extract_data_for_calibration(frames)
 
         cb = Checkerboard(self._config.checkerboard_size, self._config.checkerboard_cell_size)
         sensor_init = np.array([
@@ -113,45 +124,29 @@ class Calibrator:
             frames[0]['infrared'].shape[0] // 2
         ])
 
-        sensor = Sensor(sensor_init)
-        loss = EstimateBoardPositionsLoss(cb, points, depths, sensor, self._config.huber_loss_delta)
+        print('Estimating board positions and depth intrinsics...')
+        depth_sensor, board_positions = self._calibrate_depth_parameters(cb, sensor_init, points, depths)
 
-        print('Estimating board positions...')
-        res = least_squares(
-            loss,
-            np.ones(loss.n_params),
-            jac_sparsity=loss.get_jacobian_sparsity(),
-            x_scale='jac',
-            ftol=self._config.optimization_tolerance,
-            method='trf')
+        print('Estimating color parameters...')
+        color_sensor, depth_to_color = self._calibrate_color_parameters(cb, sensor_init, color_points, board_positions)
 
-        loss = EstimateIntrinsicsLoss(cb, points, depths, self._config.huber_loss_delta)
+        print('Estimating camera_to_tcp...')
+        camera_to_tcp = self._calibrate_camera_to_tcp(cb, positions, board_positions)
 
-        print('Estimating intrinsics...')
-        res = least_squares(
-            loss,
-            np.concatenate([sensor_init, res.x]),
-            jac_sparsity=loss.get_jacobian_sparsity(),
-            x_scale='jac',
-            ftol=self._config.optimization_tolerance,
-            method='trf')
+        camera_calibration = RGBDCameraCalibration(
+            depth_intrinsics=depth_sensor.intrinsics_as_matrix(),
+            color_intrinsics=color_sensor.intrinsics_as_matrix(),
+            depth_to_color=depth_to_color.as_matrix(),
+        )
 
-        params = loss.decompose_params(res.x.copy())
+        robot_calibration = RobotCalibration(
+            gripper_camera=camera_calibration,
+            gripper_camera_to_tcp=camera_to_tcp.as_matrix(),
+        )
 
-        print('Estimating board and camera positions')
-        loss = EstimateGlobalBoardPositionLoss(cb, positions, params['transforms'], self._config.huber_loss_delta)
-        res = least_squares(
-            loss, np.ones(loss.n_params),
-            x_scale='jac',
-            ftol=self._config.optimization_tolerance,
-            method='trf')
+        return robot_calibration
 
-        camera_to_tcp = loss.decompose_params(res.x)['camera_to_tcp'].as_matrix()
-        intrinsics = params['sensor'].intrinsics_as_matrix()
-
-        return intrinsics, camera_to_tcp
-
-    def create_env_mesh(self, frames, intrinsics, camera_to_tcp):
+    def create_env_mesh(self, frames, calibration: RobotCalibration):
         """
         Integrates all frames into single mesh
 
@@ -163,6 +158,9 @@ class Calibrator:
         Returns:
             mesh (open3d.geometry.TriangleMesh): computed mesh in robot coordinate system
         """
+
+        intrinsics = calibration.gripper_camera.depth_intrinsics
+        camera_to_tcp = calibration.gripper_camera_to_tcp
 
         model = _SLAMModel(self._config.slam_model, intrinsics, frames[0]['infrared'])
 
@@ -180,8 +178,6 @@ class Calibrator:
             p[:3, 3] *= 1000
             mat += compose_matrix_world(robot_pos[:3], robot_pos[3:]) @ camera_to_tcp @ np.linalg.inv(p)
             n_frames += 1
-
-        np.set_printoptions(precision=3, floatmode='fixed', suppress=True)
 
         u, _, vt = np.linalg.svd(mat[:3, :3], full_matrices=True)
         mat[:3, :3] = u @ vt
@@ -204,36 +200,109 @@ class Calibrator:
         yaw = 2 * (np.random.rand(1).item() - 0.5) * max_yaw
 
         res = np.array([x.item(), y.item(), z.item(), roll, pitch, yaw])
-        return res + self._config.home_pos
+        return res + np.array(self._config.home_pos)
 
     def _extract_data_for_calibration(self, frames):
         points = []
+        color_points = []
         depths = []
         positions = []
 
         print('Looking for checkerboards...')
 
         for i, frame in enumerate(tqdm(frames)):
-            img = frame['infrared']
-            depth = frame['depth']
-            found, corners = cv2.findChessboardCorners(img, self._config.checkerboard_size)
+            corners_infrared, d, corners_color = self._get_checkerboards(
+                frame['infrared'],
+                frame['depth'],
+                frame['rgb'])
 
-            if found:
-                corners = corners.astype(int).squeeze()
-                d = depth[corners[:, 1], corners[:, 0]]
+            if corners_infrared is None:
+                continue
 
-                if not np.all(d > 0):
-                    continue
-
-                points.append(corners)
-                depths.append(d)
-                positions.append(np.array(frame['pos']))
+            points.append(corners_infrared)
+            color_points.append(corners_color)
+            depths.append(d)
+            positions.append(np.array(frame['pos']))
 
         points = np.stack(points)
         depths = np.stack(depths)
         positions = np.stack(positions)
 
-        return points, depths, positions
+        return points, color_points, depths, positions
+
+    def _get_checkerboards(self, infrared, depth, color):
+        infrared_found, infrared_corners = cv2.findChessboardCorners(
+            infrared,
+            self._config.checkerboard_size)
+
+        if not infrared_found:
+            return None, None, None
+
+        infrared_corners = infrared_corners.astype(int).squeeze()
+        d = depth[infrared_corners[:, 1], infrared_corners[:, 0]]
+        if not np.all(d > 0):
+            return None, None, None
+
+        found_color, corners_color = cv2.findChessboardCorners(
+            cv2.cvtColor(color, cv2.COLOR_RGB2GRAY),
+            self._config.checkerboard_size)
+
+        if found_color:
+            corners_color = corners_color.astype(int).squeeze()
+
+        return infrared_corners, d, corners_color
+
+    def _calibrate_depth_parameters(self, cb, sensor_init, points, depths):
+        sensor = Sensor(sensor_init)
+        loss = EstimateBoardPositionsLoss(cb, points, depths, sensor, self._config.huber_loss_delta)
+
+        res = least_squares(
+            loss,
+            np.ones(loss.n_params),
+            jac_sparsity=loss.get_jacobian_sparsity(),
+            x_scale='jac',
+            ftol=self._config.optimization_tolerance,
+            method='trf')
+
+        loss = EstimateIntrinsicsLoss(cb, points, depths, self._config.huber_loss_delta)
+
+        res = least_squares(
+            loss,
+            np.concatenate([sensor_init, res.x]),
+            jac_sparsity=loss.get_jacobian_sparsity(),
+            x_scale='jac',
+            ftol=self._config.optimization_tolerance,
+            method='trf')
+
+        params = loss.decompose_params(res.x.copy())
+
+        return params['sensor'], params['transforms']
+
+    def _calibrate_color_parameters(self, cb, sensor_init, color_points, board_positions):
+        sensor = Sensor(sensor_init)
+
+        loss = EstimateColorParametersLoss(cb, board_positions, color_points, 50)
+        color_sensor = Sensor(sensor_init)
+
+        res = least_squares(
+            loss,
+            np.concatenate([sensor_init, np.zeros(6)]),
+            x_scale='jac',
+            ftol=self._config.optimization_tolerance,
+            method='trf')
+
+        params = loss.decompose_params(res.x)
+        return params['sensor'], params['transform']
+
+    def _calibrate_camera_to_tcp(self, cb, positions, board_positions):
+        loss = EstimateGlobalBoardPositionLoss(cb, positions, board_positions, self._config.huber_loss_delta)
+        res = least_squares(
+            loss, np.ones(loss.n_params),
+            x_scale='jac',
+            ftol=self._config.optimization_tolerance,
+            method='trf')
+
+        return loss.decompose_params(res.x)['camera_to_tcp']
 
 
 class _SLAMModel:

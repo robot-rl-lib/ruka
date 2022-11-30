@@ -41,7 +41,7 @@ class SingleObjectSwinTrackWrapper(gym.Wrapper):
         img_rgb_hwc = obs[self._img_key]
         box = self._tracker(img_rgb_hwc)
 
-        obs[Observe.TRACKER_OBJECT_BBOX.value] = np.array(box, dtype=np.uint16)
+        obs[Observe.TRACKER_OBJECT_BBOX.value] = np.array(box, dtype=np.int32)
         if self._save_bbox_img:
             obs["tracker_debug_bbox_img"] = cv2.rectangle(img_rgb_hwc.copy(), (box[0], box[1]),(box[2], box[3]), (255, 0, 0), thickness=2)
         return obs

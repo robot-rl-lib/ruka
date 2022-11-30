@@ -1,9 +1,12 @@
 import numpy as np
-from scipy.special import huber
-from ruka.cv.calibration import Sensor, Transformation
-from scipy.sparse import lil_matrix
+
 from ruka.util.x3d import compose_matrix_world, compose_matrix_tool
+from scipy.sparse import lil_matrix
 from scipy.spatial.transform import Rotation as R
+from scipy.special import huber
+
+from .sensor import Sensor
+from .transformation import Transformation
 
 
 class BaseLoss:
@@ -186,4 +189,57 @@ class EstimateGlobalBoardPositionLoss(BaseLoss):
     def decompose_params(self, x) -> dict:
         return {
             'camera_to_tcp': Transformation(x[Transformation.N_PARAMS:]),
+        }
+
+
+class EstimateColorParametersLoss(BaseLoss):
+    def __init__(
+        self,
+        checkerboard,
+        board_positions,
+        color_points,
+        huber_loss_delta):
+
+        super().__init__()
+
+        self.board_points = []
+        self.points = []
+        for points, transform in zip(color_points, board_positions):
+            if points is None:
+                continue
+            self.board_points.append(transform.transform(checkerboard.get_points()))
+            self.points.append(points)
+
+        self.board_points = np.stack(self.board_points)
+        self.points = np.stack(self.points)
+
+        self.huber_loss_delta = huber_loss_delta
+
+    def __call__(self, x):
+        params = self.decompose_params(x)
+
+        residuals = []
+        for points, board_points in zip(self.points, self.board_points):
+            board_transformed = params['transform'].transform(board_points)
+            projected = params['sensor'].project(board_transformed)
+
+            residuals.append((points - projected).reshape(-1))
+
+        return np.sqrt(huber(self.huber_loss_delta, np.concatenate(residuals)))
+
+    @property
+    def n_params(self):
+        return Sensor.N_PARAMS + Transformation.N_PARAMS
+
+    @property
+    def n_residuals(self):
+        return 2 * self.points.shape[0] * self.points.shape[1]
+
+    def decompose_params(self, x) -> dict:
+        sensor = Sensor(x[:Sensor.N_PARAMS])
+        transform = Transformation(x[Sensor.N_PARAMS:])
+
+        return {
+            'sensor': sensor,
+            'transform': transform,
         }

@@ -1,7 +1,7 @@
 import gym
 import time
 import numpy as np
-from ruka.robot.xarm_ import XArmError
+from ruka.robot.robot import RobotError
 from ruka.util.debug import smart_shape
 
 
@@ -22,12 +22,15 @@ class RealRobotEnv(gym.Env):
         self._last_obs = obs
         return obs
 
+    def get_observation(self):
+        return self._robot.get_observation()
+
     def step(self, action):
         start_time = time.time()
         try:
             if not self._broken:
                 obs = self._robot.step(action)
-        except XArmError as e:
+        except RobotError as e:
             print(f"ERROR: {e}")
             self._broken = True
             obs = self._last_obs
@@ -35,7 +38,7 @@ class RealRobotEnv(gym.Env):
         done = False
         info = {"broken": self._broken}
 
-    
+
         reward, is_success = self._reward(obs, info)
         if is_success or self._broken:
             done = True

@@ -1,4 +1,5 @@
 import time
+import numpy as np
 from ruka.app.ecom.picker import EcomPicker, HomeRobot, Pick, Place
 from ruka.environments.common.env import Env, Episode, Policy
 from ruka.environments.common.path_iterators import collect_episodes
@@ -19,7 +20,11 @@ class EcomPickerImpl(EcomPicker):
 
     def handle_pick(self, cmd: Pick) -> Episode:
         self._env.set_goal({"ref_img": cmd.item.reference_img})
-        ep_iterator = collect_episodes(self._env, self._pick_policy)
+        ep_iterator = collect_episodes(
+            self._env,
+            self._pick_policy,
+            reset_env=False
+        )
         return next(ep_iterator)
 
     def handle_place(self, cmd: Place) -> Episode:
@@ -28,6 +33,10 @@ class EcomPickerImpl(EcomPicker):
         return Episode()
 
     def handle_home(self, cmd: HomeRobot) -> Episode:
+        # TODO: env requres goal image to perform reset
+        #  it is better to remove such requirement
+        #  or remove go home from reset
+        self._env.set_goal({"ref_img": np.ones((32, 32, 3))})
         reset_start = time.time()
         self._env.reset()
         reset_end = time.time()

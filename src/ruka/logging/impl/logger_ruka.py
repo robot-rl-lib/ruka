@@ -214,7 +214,7 @@ class RukaLogger(Logger):
                 for step_no in range(min_step_no, max_step_no + 1):
                     frame = value.get(step_no, frame)
                     with open(f'{tmpdir}/{step_no:0{ndigits}}.jpg', 'wb') as f:
-                        f.write(frame.buf_jpg.tobytes())
+                        f.write(frame.buf_jpg)
                 subprocess.check_call(
                     [
                         'ffmpeg',
@@ -253,7 +253,7 @@ class RukaLogger(Logger):
 
 @dataclass
 class _VideoFrameInfo:
-    buf_jpg: NDArray[np.uint8]
+    buf_jpg: bytes
     shape: Tuple[int, ...]
 
 

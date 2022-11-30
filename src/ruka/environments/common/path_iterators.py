@@ -1,17 +1,18 @@
+import os
 import uuid
 import itertools
+import random
 import queue as q
-from copy import deepcopy
-from typing import Callable, Optional
+from typing import Callable, Iterator, Optional
 from threading import Thread
 import torch.multiprocessing as mp
+import ruka_os.distributed_fs_v2 as dfs
 
-import ruka.pytorch_util as ptu
+from ruka.logging.episode import load_episode
 from ruka.environments.common.env import Episode, Env, Transition, Policy
 
-
 # ------------------------------------------------------------------------------------
-#                           Simple synchronous version  
+#                           Simple synchronous version
 # ------------------------------------------------------------------------------------
 
 def collect_transitions(env: Env, policy: Policy):
@@ -28,11 +29,23 @@ def collect_transitions(env: Env, policy: Policy):
         last_obs = obs
 
 
-def collect_episodes(env: Env, policy: Policy):
-    """ Iterate over Episodes """
+def collect_episodes(env: Env, policy: Policy, reset_env: bool = True) -> Iterator[Episode]:
+    """
+    Iterate over Episodes
+    Args:
+        env (Env):
+        policy (Policy):
+        reset_env (bool, optional): Reset env before collecting the episode. Defaults to True.
+
+    Yields:
+        Episode: collected episode.
+    """
     done = True
     while True:
-        obs = env.reset()
+        if reset_env:
+            obs = env.reset()
+        else:
+            obs = env.get_observation()
         policy.reset()
 
         obs_list = [obs]
@@ -40,7 +53,7 @@ def collect_episodes(env: Env, policy: Policy):
         rews_list = []
         dones_list = []
         infos_list = []
-        done = False 
+        done = False
 
         while not done:
             action = policy.get_action(obs)
@@ -53,75 +66,88 @@ def collect_episodes(env: Env, policy: Policy):
 
         yield Episode(obs_list, acts_list, rews_list, dones_list, infos_list)
 
+def download_episodes(remote_path: str,
+    max_n: Optional[int] = None,
+    extention='.rlog',
+    shuffle=True):
+    files_in_folder = sorted(dfs.ls(remote_path))
+    episode_paths = [os.path.join(remote_path, file) for file in files_in_folder if file.endswith(extention)]
+    if shuffle:
+        random.shuffle(episode_paths)
+    if max_n:
+        episode_paths = episode_paths[:max_n]
+    for path in episode_paths:
+        yield load_episode(path)
+
 # ------------------------------------------------------------------------------------
 #                             Async iterators
 # ------------------------------------------------------------------------------------
 
 def async_thread_collect_transitions(make_env: Callable,
-                                     make_policy: Callable, 
+                                     make_policy: Callable,
                                      orig_policy: Policy,
                                      chunk_size: int,
-                                     name: Optional[str] = None):  
+                                     name: Optional[str] = None):
         """
-        Thread based async Transitions iterator 
+        Thread based async Transitions iterator
         Args:
             make_env: function for create env
             make_policy: function for create policy. Result of creation should have same state_dict as orig_policy
             orig_policy: will syncronized with remote policy (created by make_policy) every chunk size
             chunk_size: how many transitions we can collect without synchronization
             name: name for logs and debug
-        """                                                
+        """
         return AsyncThreadIterator(make_env, make_policy, orig_policy, chunk_size, collect_transitions, name)
 
 
 def async_thread_collect_episodes(make_env: Callable,
-                               make_policy: Callable, 
+                               make_policy: Callable,
                                orig_policy: Policy,
                                chunk_size: int,
-                               name: Optional[str] = None):  
+                               name: Optional[str] = None):
         """
-        Thread based async Episodes iterator 
+        Thread based async Episodes iterator
         Args:
             make_env: function for create env
             make_policy: function for create policy. Result of creation should have same state_dict as orig_policy
             orig_policy: will syncronized with remote policy (created by make_policy) every chunk size
             chunk_size: how many episodes we can collect without synchronization
             name: name for logs and debug
-        """                                                
+        """
         return AsyncThreadIterator(make_env, make_policy, orig_policy, chunk_size, collect_episodes, name)
 
 
 def async_process_collect_transitions(make_env: Callable,
-                                      make_policy: Callable, 
+                                      make_policy: Callable,
                                       orig_policy: Policy,
                                       chunk_size: int,
-                                      name: Optional[str] = None):  
+                                      name: Optional[str] = None):
         """
-        Process based async Transitions iterator 
+        Process based async Transitions iterator
         Args:
             make_env: function for create env
             make_policy: function for create policy. Result of creation should have same state_dict as orig_policy
             orig_policy: will syncronized with remote policy (created by make_policy) every chunk size
             chunk_size: how many transitions we can collect without synchronization
             name: name for logs and debug
-        """                                                
+        """
         return AsyncProcessIterator(make_env, make_policy, orig_policy, chunk_size, collect_transitions, name)
 
 
 def async_process_collect_episodes(make_env: Callable,
-                                make_policy: Callable, 
+                                make_policy: Callable,
                                 orig_policy: Policy,
                                 chunk_size: int,
-                                name: Optional[str] = None):  
+                                name: Optional[str] = None):
         """
-        Process based async Episodes iterator 
+        Process based async Episodes iterator
         Args:
             make_env: function for create env
             make_policy: function for create policy. Result of creation should have same state_dict as orig_policy
             orig_policy: will syncronized with remote policy (created by make_policy) every chunk size
             chunk_size: how many episodes we can collect without synchronization
             name: name for logs and debug
-        """                                                
+        """
         return AsyncProcessIterator(make_env, make_policy, orig_policy, chunk_size, collect_episodes, name)
 
 # ------------------------------------------------------------------------------------
@@ -146,7 +172,7 @@ class AsyncIterator:
         self._cur_item = 0
 
         self._started = False
-        
+
     def __iter__(self):
         # self._started = True
         raise NotImplementedError()
@@ -172,7 +198,7 @@ class AsyncIterator:
                 self._policy_queue, self._data_queue, self._name)
 
 
-    @staticmethod            
+    @staticmethod
     def _worker_loop(make_env, make_policy, chunk_size, make_iter, policy_queue, data_queue, name):
         print(f'Worker start {name}', flush=True)
 
@@ -187,11 +213,11 @@ class AsyncIterator:
             if new_policy_state is None:
                 break
             else:
-                policy.load_state_dict(new_policy_state)    
+                policy.load_state_dict(new_policy_state)
 
             chunk = []
             for data in itertools.islice(data_iterator, chunk_size):
-                chunk.append(data)            
+                chunk.append(data)
             data_queue.put(chunk)
 
         print(f'Worker terminated {name}', flush=True)
@@ -205,8 +231,8 @@ class AsyncThreadIterator(AsyncIterator):
         super().__init__(make_env, make_policy, orig_policy, chunk_size, make_iter, name)
         self._policy_queue = q.Queue(maxsize=1)
         self._data_queue = q.Queue(maxsize=1)
-        
-        self._thread = Thread(target=AsyncIterator._worker_loop, 
+
+        self._thread = Thread(target=AsyncIterator._worker_loop,
                               args=self._worker_args())
 
     def __iter__(self):
@@ -224,7 +250,7 @@ class AsyncThreadIterator(AsyncIterator):
             self._thread.join()
             print(f'Stopped {self._name}', flush=True)
 
-    
+
 class AsyncProcessIterator(AsyncIterator):
     """ Base class for process based iterators """
 
@@ -234,7 +260,7 @@ class AsyncProcessIterator(AsyncIterator):
 
         self._policy_queue = mp.Queue(maxsize=1)
         self._data_queue = mp.Queue(maxsize=1)
-        self._worker = mp.Process(target=AsyncIterator._worker_loop, 
+        self._worker = mp.Process(target=AsyncIterator._worker_loop,
                                   args=self._worker_args())
 
     def __iter__(self):
@@ -250,7 +276,7 @@ class AsyncProcessIterator(AsyncIterator):
             print(f'Terminating {self._name}...', flush=True)
             self._worker.terminate()
             self._worker.join()
-            print(f'Stopped {self._name}', flush=True)        
+            print(f'Stopped {self._name}', flush=True)
 
     def _send_policy(self, policy_data):
         if isinstance(policy_data, dict):

@@ -68,3 +68,9 @@ class StatefulPolicy(Policy):
 
     def load_state_dict(self, state_dict):
         return self.policy.load_state_dict(state_dict)
+
+    def eval(self):
+        return self.policy.eval()
+
+    def train(self, mode):
+        return self.policy.train(mode)

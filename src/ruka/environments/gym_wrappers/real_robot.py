@@ -12,7 +12,7 @@ class SafetyWrapper(gym.Wrapper):
 
         self._min_x = min_x
         self._max_x = max_x
-        
+
         self._min_y = min_y
         self._max_y = max_y
 
@@ -32,10 +32,10 @@ class SafetyWrapper(gym.Wrapper):
 
         dx_min = np.abs(self._min_x - x)
         dx_max = np.abs(self._max_x - x)
-      
+
         dy_min = np.abs(self._min_y - y)
         dy_max = np.abs(self._max_y - y)
-        
+
         dz_min = np.abs(self._min_z - z)
         dz_max = np.abs(self._max_z - z)
 
@@ -65,7 +65,7 @@ class SafetyWrapper(gym.Wrapper):
         #if z < self._min_z:
         #    action[2] = -0.02 * dz_min
 
-            
+
 
         if self.no_rot:
             action[3] = 0
@@ -78,18 +78,25 @@ class SafetyWrapper(gym.Wrapper):
 
 class RandomReplaceOnSuccess(gym.Wrapper):
 
-    def __init__(self, env, min_x, max_x, min_y, max_y, min_z, max_z):
+    def __init__(self, env, min_x, max_x, min_y, max_y, min_z, max_z, max_yaw=None, min_yaw=None):
         self.env = env
         self._robot_env = get_supported_robot_env(env,'_robot')._robot
 
         self._min_x = min_x
         self._max_x = max_x
-        
+
         self._min_y = min_y
         self._max_y = max_y
 
+        self._max_yaw = max_yaw
+        self._min_yaw = min_yaw
+
     def step(self, action):
-        obs, r, done, info = self.env.step(action)        
+        obs, r, done, info = self.env.step(action)
         if done and info['is_success']:
-            self._robot_env.go_to_random(self._min_x, self._max_x, self._min_y, self._max_y)
+            self._robot_env.go_to_random(
+                self._min_x, self._max_x,
+                self._min_y, self._max_y,
+                self._max_yaw, self._min_yaw
+            )
         return obs, r, done, info

@@ -7,7 +7,6 @@ from typing import Tuple, List
 from dataclasses import dataclass
 
 from ruka.robot.env import RobotEnv
-from ruka.robot.xarm_ import XArmError
 from ruka.observation import Observe, Observation
 from ruka.robot.robot import Camera, ControlMode, ArmInfo, GripperInfo, Robot
 from manipulation_main.common import transformations
@@ -36,7 +35,7 @@ class VelocityControlRobotEnv(RobotEnv):
 
         self.gripper_open_position = gripper_open_position
         self.gripper_close_position = gripper_close_position
-        
+
         self.dt = dt
 
         self._gripper_open = None
@@ -44,8 +43,9 @@ class VelocityControlRobotEnv(RobotEnv):
         self._observation_types=observation_types
 
     def reset(self):
-        
-        self.action_controller.reset()    
+
+        # TODO: understand why we need to reset controller on env reset
+        self.action_controller.reset()
 
         # dont use RobotAction.Go_HOME because it reset control to POS
         # TODO: fix it
@@ -59,7 +59,7 @@ class VelocityControlRobotEnv(RobotEnv):
                 })
         self._gripper_open = True
 
-        return self._get_observation()
+        return self.get_observation()
 
     def step(self, action):
         # Parse action.
@@ -71,7 +71,7 @@ class VelocityControlRobotEnv(RobotEnv):
             self._gripper_open = True
         elif action['gripper'] == self.gripper_close_position:
             self._gripper_open = False
-        return self._get_observation()
+        return self.get_observation()
 
     @property
     def action_space(self):
@@ -116,7 +116,7 @@ class VelocityControlRobotEnv(RobotEnv):
             })
         self.camera.stop()
 
-    def _get_observation(self):       
+    def get_observation(self):
         if self._observation_ts:
             time.sleep(max(0, self._observation_ts + self.dt - time.time()))
         else:
@@ -148,19 +148,20 @@ class VelocityControlRobotEnv(RobotEnv):
             obs[Observe.GRIPPER.value] = np.array([gripper], dtype=np.float32)
         if Observe.GRIPPER_OPEN in self._observation_types:
             obs[Observe.GRIPPER_OPEN.value] = np.array([self._gripper_open], dtype=np.uint8)
-    
+
         return obs
 
-    def go_to_random(self, x_min, x_max, y_min, y_max):
+    def go_to_random(self, x_min, x_max, y_min, y_max, yaw_min=None, yaw_max=None):
         self.robot.steady(ControlMode.POS)
 
         x, y, z = self.arm_info.pos
         roll, pitch, yaw = self.arm_info.angles
         x_new = np.random.uniform(x_min+1, x_max-1)
         y_new = np.random.uniform(y_min+1, y_max-1)
+        yaw_new = np.random.uniform(yaw_min, yaw_max) if yaw_min is not None and yaw_max is not None else yaw
 
         # TODO: not use robot.set_pos directly -> move to separate pos actions
-        self.robot.set_pos([x_new, y_new, z], [roll, pitch, yaw])
+        self.robot.set_pos([x_new, y_new, z], [roll, pitch, yaw_new])
         self.robot.set_gripper_pos(self.gripper_open_position)
         self._gripper_open = True
 

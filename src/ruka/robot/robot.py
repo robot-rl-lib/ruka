@@ -58,6 +58,8 @@ class Robot:
         """
         Go to initial position and go to hold() mode after it is reached.
 
+        Should be called after RobotRecoverableError has occurred.
+
         Has "wait=True" semantics: waits until the mode transition is complete
         before returning.
         """
@@ -253,12 +255,26 @@ class Camera(abc.ABC):
 
 
 class RobotError(Exception):
+    """
+    Generic robot error
+    """
     pass
 
 
-class ArmError(RobotError):
+class RobotRecoverableError(RobotError):
+    """
+    Recoverable robot error
+
+    To perform robot recovery consider calling go_home method
+    """
     pass
 
 
-class GripperError(RobotError):
+class RobotUnrecoverableError(RobotError):
+    """
+    Unrecoverable robot error
+
+    Manual robot operation and restart are required
+    """
     pass
+

@@ -49,6 +49,11 @@ KEYMAP_KEYBOARD_4DOF = {
     'exit': DiscreteTrigger(ecodes.KEY_ESC),
 }
 
+KEYMAP_KEYBOARD_6DOF = {
+    **KEYMAP_KEYBOARD_4DOF,
+    'pitch': DiscreteAxis(ecodes.KEY_K, ecodes.KEY_I),
+    'yaw': DiscreteAxis(ecodes.KEY_J, ecodes.KEY_L),
+}
 
 # ---------------------------------------------------------------------- HID --
 
@@ -62,7 +67,7 @@ class HID:
         self._device = device
         self._keymap = copy.deepcopy(keymap)
         self._action_space = gym.spaces.Dict({
-            name: input.action_space 
+            name: input.action_space
             for name, input in self._keymap.items()
         })
 
@@ -85,7 +90,7 @@ class HID:
                 assert 0
 
         return action
-    
+
     def visualize_in_console(self):
         print()
         while True:
