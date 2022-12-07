@@ -1,111 +1,104 @@
 from dataclasses import dataclass, is_dataclass, fields, MISSING
-from typing import Any, Dict, List, Optional
+from ruka.util.json import XJSONSerializable, State
+from typing import Dict, List, Optional
 
 
-State = Dict[str, Any]
-
-
-class Migrating:
+class Migrating(XJSONSerializable):
     """
-    This class has two purposes.
+    USAGE
+        Migrating provides mechanism of backward-compatibility of serialized
+        data. Specifically, newer version of code will be able to load a state,
+        saved by the older version of code.
 
-    FIRST, it provides __getstate__ / __setstate__ to dataclasses. It is not
-    being done so that you could pickle them, but rather so that you could
-    inspect that state further (e.g. if you're serializing a dataclass into
-    JSON).
+        Lets take this dataclass:
 
-    - State is a Dict[str, Any] which contains field names as keys and field
-      values as values.
-    - State contains class name and version.
+            @dataclass
+            class Foo(Migrating):
+                x: int
+                y: int
 
-    An example:
+            >> Foo(1, 2).__getstate__()
+            {'x': 1, 'y': 2, 'class': {'name': Foo, 'module': 'foo', 'version': 1}}
 
-        @dataclass
-        class Foo(Migrating):
-            x: int
-            y: int
+        And create version 2 by adding a field:
 
-        >>> Foo(1, 2).__getstate__()
-        {'x': 1, 'y': 2, 'class': {'name': 'Foo', 'module': 'foo', 'version': 1}}
+            @dataclass
+            class Foo(Migrating):
+                x: int
+                y: int
+                z: int = 0
 
-    SECOND, Migrating provides mechanism of backward-compatibility of
-    serialized data. Specifically, newer version of code will be able to load
-    a state, saved by the older version of code.
+                CHANGES: typing.ClassVar = {
+                    2: [Add('z')]
+                }
 
-    Lets take the dataclass from the example above and modify it. First, we
-    will create version 2 by adding a field:
+            >>> Foo(1, 2).__getstate__()
+            {'x': 1, 'y': 2, 'z': 0, 'class': {'name': Foo, 'module': 'foo', 'version': 2}}
 
-        @dataclass
-        class Foo(Migrating):
-            x: int
-            y: int
-            z: int = 0
+        We've created version 2 of the class. When you add a new field, you
+        must always specify either default= or default_factory=.
 
-            CHANGES: typing.ClassVar = {
-                2: [Add('z')]
-            }
+        Next, let's create version 3 by removing one field and by renaming
+        another:
 
-        >>> Foo(1, 2).__getstate__()
-        {'x': 1, 'y': 2, 'z': 0, 'class': {'name': Foo, 'module': 'foo', 'version': 2}}
+            @dataclass
+            class Foo(Migrating):
+                y1: int
+                z: int = 0
 
-    We've created version 2 of the class. When you add a new field, you should
-    always specify either default= or default_factory=.
+                CHANGES: typing.ClassVar = {
+                    2: [Add('z')],
+                    3: [Remove('x'), Rename('y', 'y1')]
+                }
 
-    Next, let's create version 3 by removing one field and by renaming another:
+            >>> Foo(2, 3).__getstate__()
+            {'y1': 2, 'z': 3, 'class': {'name': Foo, 'module': 'foo', 'version': 3}}
 
-        @dataclass
-        class Foo(Migrating):
-            y1: int
-            z: int = 0
+    NOTES
+        - Currently, there are three types of changes available: Add, Remove,
+          and Rename. More might be available later.
 
-            CHANGES: typing.ClassVar = {
-                2: [Add('z')],
-                3: [Remove('x'), Rename('y', 'y1')]
-            }
+        - Warning: only dataclass fields are saved or loaded in __getstate__ /
+          __setstate__:
 
-        >>> Foo(2, 3).__getstate__()
-        {'y1': 2, 'z': 3, 'class': {'name': Foo, 'module': 'foo', 'version': 3}}
+              @dataclass
+              class Bar(Migrating):
+                  x: int
 
-    Currently, there are three types of changes available: Add, Remove, and
-    Rename.
+              >>> b = Bar(1)
+              >>> b.__getstate__()
+              >>> {'x': 1, 'class': {'name': 'Bar', 'module': 'bar', 'version': 1}}
+              >>> b.y = 2
+              >>> b.__getstate__()
+              >>> {'x': 1, 'class': {'name': 'Bar', 'module': 'bar', 'version': 1}}  # <--- No y!
 
-    Note that only dataclass fields are saved or loaded in __getstate__ /
-    __setstate__:
-
-        @dataclass
-        class Bar(Migrating):
-            x: int
-
-        >>> b = Bar(1)
-        >>> b.__getstate__()
-        >>> {'x': 1, 'class': {'name': 'Bar', 'module': 'bar', 'version': 1}}
-        >>> b.y = 2
-        >>> b.__getstate__()
-        >>> {'x': 1, 'class': {'name': 'Bar', 'module': 'bar', 'version': 1}}  # <--- No y!
+        - Migrating is XJSONSerializable. This means that if all its fields are
+          [X]JSONSerializable, the dataclass itself will also be serializable
+          through ruka.json.x{dump,load}*
     """
 
     def __new__(cls, *args, **kwargs):
         validate_class(cls)
-        return object.__new__(cls)
+        return super().__new__(cls)
 
-    def __getstate__(self) -> State:
-        state = {}
-        for field in fields(self):
-            state[field.name] = getattr(self, field.name)
-        state['class'] = {
-            'name': type(self).__qualname__,
-            'module': type(self).__module__,
-            'version': get_current_version(type(self))
-            }
+    def xjson_getstate(self) -> State:
+        state = {f.name: getattr(self, f.name) for f in fields(self)}
+        state['class'] = self.xjson_getclass()
         return state
 
-    def __setstate__(self, state: State):
+    def xjson_setstate(self, state: State):
         validate_state(state, type(self))
         migrate_state_to_current_version(type(self), state)
         for k, v in state.items():
             if k == 'class':
                 continue
             setattr(self, k, v)
+
+    @classmethod
+    def xjson_getclass(cls):
+        j = super().xjson_getclass()
+        j['version'] = get_current_version(cls)
+        return j
 
 
 class Change:
@@ -141,11 +134,6 @@ def validate_class(cls):
     # Class is a dataclass.
     assert is_dataclass(cls)
 
-    # Class is not nested in some funky place.
-    assert cls.__qualname__
-    assert cls.__module__ and not cls.__module__.startswith('__')
-    assert '.' not in cls.__qualname__
-
     # Versions are consecutive.
     changes = _get_changes(cls)
     if changes:
@@ -180,18 +168,6 @@ def validate_state(state: State, cls: Optional[type] = None):
     Check that state is well-formed.
     If cls is not None, check that state corresponds to cls.
     """
-    # Check schema.
-    if (
-        not isinstance(state, dict) or
-        'class' not in state or
-        not isinstance(state['class'], dict) or
-        set(state['class'].keys()) != {'version', 'name', 'module'} or
-        not isinstance(state['class']['version'], int) or
-        not isinstance(state['class']['name'], str) or
-        not isinstance(state['class']['module'], str)
-        ):
-        raise RuntimeError(f'invalid state for {cls}: {state!r}')
-
     # Check version.
     version_from = state['class']['version']
     if version_from <= 0:
@@ -280,18 +256,6 @@ def migrate_state_to_current_version(cls: type, state: State):
         raise RuntimeError(
             f'invalid state: {state!r}; '
             f'following keys shouldn\'t be here: {extra_keys}')
-
-
-def load_object(state: State) -> Migrating:
-    """
-    Load an object from state. Like pickle.loads()
-    """
-    validate_state(state)
-    module = __import__(state['class']['module'], fromlist=[None])
-    cls = getattr(module, state['class']['name'])
-    obj = cls.__new__(cls)
-    obj.__setstate__(state)
-    return obj
 
 
 def _get_changes(cls) -> Dict[str, List['Change']]:

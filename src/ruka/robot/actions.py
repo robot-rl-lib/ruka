@@ -9,6 +9,7 @@ from ruka.robot.robot import ArmInfo, ArmPosControlled, ArmVelControlled, \
     GripperPosControlled, Robot, ControlMode
 from ruka.util.x3d import Vec3, chain, compose_matrix_tool, \
     compose_matrix_world, decompose_matrix_world
+from ruka.robot.collision import CollisionDetector
 
 
 # -------------------------------------------------------------------- Robot --
@@ -137,6 +138,16 @@ class VelWorldOverRobot(VelWorld, CartesianController):
     @property
     def angle_limits(self) -> Tuple[Vec3, Vec3]:
         return self._arm.angle_limits
+
+
+class CollisionAwareVelWorldOverRobot(VelWorldOverRobot):
+    def __init__(self, arm: ArmVelControlled, detector: CollisionDetector):
+        super().__init__(arm)
+        self._detector = detector
+
+    def act(self, action):
+        action['xyz'] = self._detector.test_vel(action['xyz'])
+        super().act(action)
 
 
 class VelToolOverWorld(CartesianController):

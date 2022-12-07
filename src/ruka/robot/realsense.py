@@ -11,6 +11,7 @@ class RealsenseConfig:
     width: int
     height: int
     fps: int
+    serial_number: str = '146222252031'
     enable_color: bool = True
     enable_infrared: bool = False
     warmup_frames: int = 30  # first captured frames are dark, skip them
@@ -26,6 +27,7 @@ class RealsenseCamera(Camera):
 
         self._pipeline = rs.pipeline()
         self._config = rs.config()
+        self._config.enable_device(config.serial_number)
         self._config.enable_stream(rs.stream.depth, config.width, config.height, rs.format.z16, config.fps)
         if self._enable_color:
             self._config.enable_stream(rs.stream.color, config.width, config.height, rs.format.rgb8, config.fps)

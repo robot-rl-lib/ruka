@@ -1,18 +1,22 @@
 import inspect
 import logging
-from typing import Tuple
+from typing import Dict, Tuple
 import numpy as np
 import multiprocessing as mp
 import random
 import time
 import traceback
+import math
+import itertools
+from functools import wraps
+from threading import Event
 
 from dataclasses import dataclass
 from xarm.wrapper import XArmAPI
 from xarm.x3.code import APIState
 
 from ruka.util.reporter import store_live_robot_params
-from ruka.util.x3d import Vec3, chain, conventional_rotation
+from ruka.util.x3d import Vec3, conventional_rotation
 
 
 from .robot import \
@@ -21,6 +25,28 @@ from .robot import \
 
 logging.basicConfig()
 
+FALLBACK_TO_SLEEP_IN_API_CALLS = False
+FALLBACK_TO_NORMAL_SPEED_FOR_INTENSE = False
+
+def raise_for_not_finite(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        def _raise_for_not_finite(arg):
+            if isinstance(arg, str) or isinstance(arg, bytes):
+                return
+            if isinstance(arg, float) and not math.isfinite(arg):
+                raise ValueError("Infinite or NaN are not valid arguments")
+            if np.isscalar(arg) and not np.isfinite(arg):
+                raise ValueError("Infinite or NaN are not valid arguments")
+        for arg in itertools.chain(args, kwargs.values()):
+            _raise_for_not_finite(arg)
+            try:
+                for inner in arg:
+                    _raise_for_not_finite(inner)
+            except TypeError:
+                continue
+        return f(*args, **kwargs)
+    return wrapper
 
 # ---------------------------------------------------------------------- API --
 
@@ -35,33 +61,41 @@ class XArmConfig:
     max_jerk: float
     gripper_max_speed: float
     max_joint_speed: float
-    joints_angles_reduction: float
+    joints_limits: Dict[int, Tuple[float, float]]
 
     home_pos: Vec3
     home_angles: Vec3
     collision_sensitivity: int
     max_reset_retries: int
-
+    max_intense_speed: float  # L2
+                              # max speed for the trajectories we are sure enough
+                              # will not cause problems (e.g. go_home)
     report_info: bool = True
 
 
 class _XArm(ArmInfo, GripperInfo, GripperPosControlled):
     def __init__(self, config: XArmConfig):
         self._config = config
-        self._joints_hard_limits = [
-            -360, 360,                                                       # Joint 1
-            -118, 120,                                                       # Joint 2
-            -360, 360,                                                       # Joint 3
-            -11, 225,                                                        # Joint 4
-            -360, 360,                                                       # Joint 5
-            -97, 180,                                                        # Joint 6
-            -360, 360,                                                       # Joint 7
-        ]
-        self._joints_soft_limits = [
-            lim + self._config.joints_angles_reduction if i % 2 else \
-            lim - self._config.joints_angles_reduction
-            for i, lim in enumerate(self._joints_hard_limits)
-        ]
+        self._joints_hard_limits = {
+            1: (-360, 360),                                                       # Joint 1
+            2: (-118, 120),                                                       # Joint 2
+            3: (-360, 360),                                                       # Joint 3
+            4: (-11, 225),                                                        # Joint 4
+            5: (-360, 360),                                                       # Joint 5
+            6: (-97, 180),                                                        # Joint 6
+            7: (-360, 360),                                                       # Joint 7
+        }
+        self._joints_soft_limits = {
+            i: (
+                max(hard_limit[0], soft_limit[0]),
+                min(hard_limit[1], soft_limit[1])
+            )
+            for i, hard_limit in self._joints_hard_limits.items()
+            if (soft_limit := self._config.joints_limits.get(i, hard_limit))
+        }
+        self._reduced_limits_list = []
+        for i in sorted(self._joints_soft_limits.keys()):
+            self._reduced_limits_list.extend(self._joints_soft_limits[i])
         self._api = _with_xarm_error_handling(XArmAPI(config.ip))            # Handle errors
         self._api.clean_error()                                              # Clean all previous errors
         self._api.clean_warn()                                               # Clean all previous warnings
@@ -74,7 +108,7 @@ class _XArm(ArmInfo, GripperInfo, GripperPosControlled):
         self._api.set_safe_level(4)                                          # Default safe level
         self._api.set_fence_mode(False)                                      # Disable xarm safety boundaries
         self._api.set_reduced_max_joint_speed(self._config.max_joint_speed)  # Reduce joints angular speed
-        self._api.set_reduced_joint_range(self._joints_soft_limits)          # Reduce joints angles
+        self._api.set_reduced_joint_range(self._reduced_limits_list)         # Reduce joints angles
         self._api.set_reduced_mode(True)                                     # Enable joints restrictions
         self._api.set_gripper_speed(config.gripper_max_speed * 10)           # Set current gripper speed
         self._api.set_tcp_maxacc(config.max_acc)
@@ -84,6 +118,12 @@ class _XArm(ArmInfo, GripperInfo, GripperPosControlled):
         if self._config.report_info:
             self._api.register_report_callback(self.report_info, report_joints=True)
 
+        self._mode_change_event = Event()
+        self._api.register_mode_changed_callback(self.report_mode_change)
+        self._api.register_state_changed_callback(self.report_state_change)
+
+        self._max_intense_speed = self._config.max_speed if FALLBACK_TO_NORMAL_SPEED_FOR_INTENSE else self._config.max_intense_speed
+
     # - Robot - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
     def steady(self, control_mode=False):
@@ -92,18 +132,22 @@ class _XArm(ArmInfo, GripperInfo, GripperPosControlled):
         self._accept_move_commands = True
 
     def hold(self):
-        self._api.reset()
-        time.sleep(1)
+        if FALLBACK_TO_SLEEP_IN_API_CALLS:
+            self._api.reset()
+            time.sleep(1)
+        else:
+            self._api.reset(wait=True)
+            self._accept_move_commands = False
 
     def relax(self):
         self._api.reset()
-        self._api.set_mode(2)
-        self._api.set_state(0)
+        self._api_set_mode(2)
+        self._api_set_state(0)
         self._accept_move_commands = False
 
     def park(self):
         self._api.reset()
-        self._api.set_state(4)
+        self._api_set_state(4)
         self._api.motion_enable(False)
         self._accept_move_commands = False
 
@@ -114,9 +158,8 @@ class _XArm(ArmInfo, GripperInfo, GripperPosControlled):
         while True:
             self._api.reset(wait=True)
             self._api.set_collision_sensitivity(0)  # Disable collision detection
-            self._api.set_mode(0)
-            self._api.set_state(0)
-            time.sleep(.5) # Arm needs to sleep for a sec
+            self._api_set_mode(0)
+            self._api_set_state(0)
             try:
                 x, y, z = self._config.home_pos
                 roll, pitch, yaw = self._config.home_angles
@@ -124,7 +167,8 @@ class _XArm(ArmInfo, GripperInfo, GripperPosControlled):
                 roll = ang[0]
                 pitch = ang[1]
                 yaw = ang[2]
-                self._api.set_position(x=x, y=y, z=z, roll=roll, pitch=pitch, yaw=yaw, wait=True)
+                self._api.set_gripper_position(800, auto_enable=True, wait=False) # open gripper for safety
+                self._api.set_position(x=x, y=y, z=z, roll=roll, pitch=pitch, yaw=yaw, speed=self._max_intense_speed, wait=True)
                 self._api.set_collision_sensitivity(self._config.collision_sensitivity)
                 break
             except XArmControllerRecoverableError:
@@ -205,8 +249,8 @@ class _XArm(ArmInfo, GripperInfo, GripperPosControlled):
             joints[jname] = np.deg2rad(x)
             num += 1
         # in URDF 1 - closed, 0 - open
-        # in gripper_pos - 79 - open, 0 - closed
-        joints['drive_joint'] = (79 - self.gripper_pos) / 79
+        # in gripper_pos - 80 - open, 0 - closed
+        joints['drive_joint'] = (80 - self.gripper_pos) / 80
         ds['joints'] = joints
 
         store_live_robot_params('xarm', ds)
@@ -219,6 +263,58 @@ class _XArm(ArmInfo, GripperInfo, GripperPosControlled):
         js = self._api.get_joint_states(is_radian=False)
         data = {'joints': js[1][0]}
         self.report_info(data)
+
+
+    def _api_set_mode(self, new_mode: int, force: bool = False):
+        """
+        Change XArm mode and wait it to be changed.
+
+        Has "wait=True" semantics: waits until the mode is changed.
+        """
+        # already in request mode
+        if self._api.mode == new_mode and not force:
+            #print('MODE switch not needed at ', datetime.datetime.now())
+            return True
+
+        # use "old approach"
+        # TODO: remove when new tech is working fine
+        if FALLBACK_TO_SLEEP_IN_API_CALLS:
+            self._api.set_mode(new_mode)
+            time.sleep(.5)
+            return True
+
+        self._mode_change_event.clear()
+
+        #print('MODE switch requested at ', datetime.datetime.now())
+
+        self._api.set_mode(new_mode)
+        is_set = self._mode_change_event.wait(timeout=.5)
+        if self._api.mode != new_mode:
+            #print('MODE switch failed ', datetime.datetime.now())
+            raise XArmControllerRecoverableError(error_code, "Mode switch failed")
+
+        #print('MODE switch done at ', datetime.datetime.now())
+        return True
+
+    def _api_set_state(self, new_state: int, force: bool = True):
+        """
+        Change XArm state no need to wait after
+        """
+        self._api.set_state(new_state)
+        if FALLBACK_TO_SLEEP_IN_API_CALLS:
+            time.sleep(.5)
+
+    def report_mode_change(self, data):
+        if FALLBACK_TO_SLEEP_IN_API_CALLS:
+            return
+        self._mode_change_event.set()
+        #print('MCHANGED:', data, ' at ', datetime.datetime.now())
+
+    def report_state_change(self, data):
+        if FALLBACK_TO_SLEEP_IN_API_CALLS:
+            return
+        #print('SCHANGED:', data, ' at ', datetime.datetime.now())
+
 
 # Translate XARM reported angles to RUKA conventional angles
 def xarm_to_ruka(angles: Vec3) -> Vec3:
@@ -244,12 +340,12 @@ class XArmPosControlled(_XArm, ArmPosControlled):
         if control_mode is False:
             control_mode = ControlMode.POS
         if control_mode != ControlMode.POS:
-            raise XArmControllerError(APIState.HAS_ERROR, "Cannot control non Pos in PosControlled")
+            raise XArmControllerUnrecoverableError(APIState.HAS_ERROR, "Cannot control non Pos in PosControlled")
         _XArm.steady(self, control_mode)
-        self._api.set_mode(0)
-        self._api.set_state(0)  # Prepare to move
-        time.sleep(.5) # without sleep not work
+        self._api_set_mode(0)
+        self._api_set_state(0)
 
+    @raise_for_not_finite
     def set_pos(self, pos: Vec3, angles: Vec3):
         self.check()
         if not self._accept_move_commands:
@@ -275,7 +371,7 @@ class XArmPosControlled(_XArm, ArmPosControlled):
         return (np.sqrt(np.sum(pos_diff ** 2)) < pos_tolerance) and (np.sqrt(np.sum(angle_diff ** 2)) < angles_tolerance)
 
 
-class XArmVelOverPosControlled(ArmInfo, GripperInfo, GripperPosControlled, ArmVelControlled):
+class XArmVelOverPosControlled(ArmInfo, GripperInfo, GripperPosControlled, ArmPosVelControlled):
     def __init__(self, config: XArmConfig, dt: float = 0.04):
         self._conn, child_conn = mp.Pipe()
         self._control_loop_process = mp.Process(
@@ -285,6 +381,11 @@ class XArmVelOverPosControlled(ArmInfo, GripperInfo, GripperPosControlled, ArmVe
         )
         self._control_loop_process.start()
 
+    @raise_for_not_finite
+    def set_pos(self, pos: Vec3, angles: Vec3):
+        self._rpc('set_pos', pos, angles)
+
+    @raise_for_not_finite
     def set_vel(self, vel: Vec3, angular_vel: Vec3):
         self._rpc('set_vel', vel, angular_vel)
 
@@ -299,6 +400,9 @@ class XArmVelOverPosControlled(ArmInfo, GripperInfo, GripperPosControlled, ArmVe
 
     def relax(self):
         self._rpc('relax')
+
+    def go_home(self):
+        self._rpc('go_home')
 
     @property
     def pos(self) -> Vec3:
@@ -341,6 +445,11 @@ class XArmVelOverPosControlled(ArmInfo, GripperInfo, GripperPosControlled, ArmVe
     @staticmethod
     def _control_loop(config, dt, conn):
         class _XArmPosControlledWithSpeed(XArmPosControlled):
+            def steady(self, control_mode=False):
+                self._api_set_mode(7)
+                self._api_set_state(0)
+                self._accept_move_commands = True
+
             def set_pos(self, pos: Vec3, angles: Vec3, speed: float):
                 self.check()
                 if not self._accept_move_commands:
@@ -360,6 +469,7 @@ class XArmVelOverPosControlled(ArmInfo, GripperInfo, GripperPosControlled, ArmVe
         pos_control = _XArmPosControlledWithSpeed(config)
         vel = np.zeros((3,))
         angular_vel = np.zeros((3,))
+        control_mode = None
         try:
             while True:
                 if conn.poll():
@@ -376,8 +486,11 @@ class XArmVelOverPosControlled(ArmInfo, GripperInfo, GripperPosControlled, ArmVe
                             pos_control.hold()
                             conn.send(None)
                         elif action == 'steady':
-                            control_mode = np.array(args[0])
-                            pos_control.steady(control_mode)
+                            control_mode = args[0]
+                            if control_mode == ControlMode.POS:
+                                vel = np.zeros((3,))
+                                angular_vel = np.zeros((3,))
+                            pos_control.steady()
                             conn.send(None)
                         elif action == 'relax':
                             pos_control.relax()
@@ -401,12 +514,16 @@ class XArmVelOverPosControlled(ArmInfo, GripperInfo, GripperPosControlled, ArmVe
                         elif action == 'set_gripper_pos':
                             pos_control.set_gripper_pos(args[0])
                             conn.send(None)
+                        elif action == 'set_pos':
+                            pos, angles = args
+                            pos_control.set_pos(pos, angles, config.max_speed)
+                            conn.send(None)
                         else:
                             conn.send(None)
                     except Exception as e:
                         traceback.print_exc()
                         conn.send(e)
-                if pos_control.accept_move_commands:
+                if control_mode == ControlMode.VEL and pos_control.accept_move_commands:
                     speed = np.linalg.norm(vel)
                     pos = np.array(pos_control.pos)
                     angles = np.array(pos_control.angles)
@@ -423,12 +540,12 @@ class XArmVelControlled(_XArm, ArmVelControlled):
         if control_mode is False:
             control_mode = ControlMode.VEL
         if control_mode != ControlMode.VEL:
-            raise XArmControllerError(APIState.HAS_ERROR, "Cannot control non Vel in VelControlled")
+            raise XArmControllerUnrecoverableError(APIState.HAS_ERROR, "Cannot control non Vel in VelControlled")
         _XArm.steady(self,control_mode)
-        self._api.set_mode(5)   # Enable velocity control
-        self._api.set_state(0)  # Prepare to move
-        time.sleep(.5) # without sleep not work
+        self._api_set_mode(5)
+        self._api_set_state(0)
 
+    @raise_for_not_finite
     def set_vel(self, vel: Vec3, angular_vel: Vec3):
         self.check()
         if not self._accept_move_commands:

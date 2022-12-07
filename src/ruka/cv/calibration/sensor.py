@@ -1,5 +1,8 @@
 import numpy as np
 
+from numpy.typing import NDArray
+
+
 class Sensor:
     N_PARAMS = 4
     FX_INDEX = 0
@@ -10,6 +13,15 @@ class Sensor:
     def __init__(self, params):
         assert params.size == self.N_PARAMS
         self.params = params
+
+    @staticmethod
+    def create_from_intrinsics(intrinsics: NDArray):
+        params = np.zeros(Sensor.N_PARAMS)
+        params[Sensor.FX_INDEX] = intrinsics[0, 0]
+        params[Sensor.FY_INDEX] = intrinsics[1, 1]
+        params[Sensor.PPX_INDEX] = intrinsics[0, 2]
+        params[Sensor.PPY_INDEX] = intrinsics[1, 2]
+        return Sensor(params)
 
     def deproject(self, pts, depths):
         fx, fy, ppx, ppy = self.params

@@ -1,6 +1,7 @@
 import gym
 import numpy as np
 from ruka.environments.common.env_util import get_supported_robot_env
+from ruka.robot.robot import RobotError
 
 class SafetyWrapper(gym.Wrapper):
 
@@ -94,9 +95,12 @@ class RandomReplaceOnSuccess(gym.Wrapper):
     def step(self, action):
         obs, r, done, info = self.env.step(action)
         if done and info['is_success']:
-            self._robot_env.go_to_random(
-                self._min_x, self._max_x,
-                self._min_y, self._max_y,
-                self._max_yaw, self._min_yaw
-            )
+            try:
+                self._robot_env.go_to_random(
+                    self._min_x, self._max_x,
+                    self._min_y, self._max_y,
+                    self._max_yaw, self._min_yaw
+                )
+            except RobotError as e:
+                print('Robot error while random replace. No need to do anything, just reset')
         return obs, r, done, info

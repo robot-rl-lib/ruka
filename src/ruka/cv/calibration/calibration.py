@@ -2,9 +2,11 @@ import numpy as np
 
 from dataclasses import dataclass
 from numpy.typing import NDArray
-from ruka.util.migrating import Migrating
+from ruka.robot.perception import SensorId
 from ruka.util.distributed_fs import download_pickle, upload_pickle
+from ruka.util.migrating import Migrating
 from ruka.util.saved_by_remote_path import SavedByRemotePath
+from typing import Dict
 
 
 @dataclass
@@ -16,10 +18,17 @@ class RGBDCameraCalibration(Migrating):
 
 
 @dataclass
+class StaticCamera:
+    camera: RGBDCameraCalibration
+    extrinsics_to_base: NDArray[np.float]  # (4, 4,) transformation matrix
+
+
+@dataclass
 class RobotCalibration(Migrating):
     gripper_camera: RGBDCameraCalibration
-
     gripper_camera_to_tcp: NDArray[np.float]  # (4, 4,) transformation matrix
+
+    static_cameras: Dict[SensorId, StaticCamera]
 
 
 @dataclass

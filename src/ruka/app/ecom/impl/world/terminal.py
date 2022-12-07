@@ -7,4 +7,10 @@ class TerminalWorld(World):
         for item in cmd.basket.items:
             print(f"  - {item.name}")
         while _ := input("enter yes or y when done ->") not in ["y", "yes"]:
-            pass
+           pass
+
+class AlwaysReadyWorld(World):
+    def handle_reset_basket(self, cmd: ResetBasket):
+        print("Basket should be ready:")
+        for item in cmd.basket.items:
+            print(f"  - {item.name}")

@@ -45,6 +45,7 @@ KEYMAP_KEYBOARD_4DOF = {
     'z': DiscreteAxis(ecodes.KEY_S, ecodes.KEY_W),
     'roll': DiscreteAxis(ecodes.KEY_U, ecodes.KEY_O),
     'gripper': DiscreteTrigger(ecodes.KEY_SPACE),
+    'speed': DiscreteTrigger(ecodes.KEY_LEFTSHIFT),
     'home': DiscreteTrigger(ecodes.KEY_HOME),
     'exit': DiscreteTrigger(ecodes.KEY_ESC),
 }

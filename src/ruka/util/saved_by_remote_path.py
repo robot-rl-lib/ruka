@@ -2,8 +2,8 @@ import json
 import pickle
 
 from dataclasses import is_dataclass, fields
-from ruka.util.json import xdumpj, xloadj
-from ruka.util.migrating import Migrating, State, validate_state, load_object
+from ruka.util.json import xdumpj, xloadj, XJSONSerializable
+from ruka.util.migrating import Migrating, State, validate_state
 from ruka_os import distributed_fs_v2 as dfs
 
 
@@ -17,8 +17,8 @@ class SavedByRemotePath(Migrating):
     - When saved through .save() method, the "real" object contents are saved.
 
     The real object contents can be saved through pickling (default),
-    ruka.util.json.xdump (see JSONSavedByRemotePath), or in a completely custom
-    way.
+    ruka.util.json.xdump (see SavedByRemotePathToJSON), or in a completely
+    custom way.
 
     Usage:
 
@@ -55,11 +55,11 @@ class SavedByRemotePath(Migrating):
             my_list_copy = BPL.load('//data/my_list.bpl.pickle')
 
     5. By default, save() and load() use pickling to save/load real contents.
-       This can be overridden by inheriting from JSONSavedByRemotePath
+       This can be overridden by inheriting from SavedByRemotePathToJSON
        instead of SavedByRemotePath:
 
             @dataclass
-            class BPL(JSONSavedByRemotePath):
+            class BPL(SavedByRemotePathToJSON):
                 ...  # same as above
 
 
@@ -68,7 +68,7 @@ class SavedByRemotePath(Migrating):
             my_list_copy = BPL.load('//data/my_list.bpl.json')
             my_list_copy = xloadr('//data/my_list.bpl.json')
 
-        Note that when you derive from JSONSavedByRemotePath, you can use
+        Note that when you derive from SavedByRemotePathToJSON, you can use
         xloadr() too.
 
         Also note, that you can edit '//data/my_list.bpl.json' by hand.
@@ -99,20 +99,14 @@ class SavedByRemotePath(Migrating):
         assert 'remote_path' in {f.name for f in fields(cls)}
         return Migrating.__new__(cls)
 
-    def __getstate__(self) -> State:
+    def xjson_getstate(self) -> State:
         if not isinstance(self.remote_path, str):
             raise RuntimeError(
                 f'Cannot serialize {type(self)}, remote_path is {self.remote_path}')
-        state = Migrating.__getstate__(self)
-        return {
-            'remote_path': self.remote_path,
-            'class': state['class']
-        }
+        return {'remote_path': self.remote_path, 'class': self.xjson_getclass()}
 
-    def __setstate__(self, state: State):
+    def xjson_setstate(self, state: State):
         validate_state(state, type(self))
-        if not isinstance(state.get('remote_path'), str):
-            raise RuntimeError(f'invalid/no remote_path in state: {state!r}')
         obj = self.load(state['remote_path'])
         assert type(obj) is type(self)
         for f in fields(self):
@@ -121,37 +115,35 @@ class SavedByRemotePath(Migrating):
     def save(self):
         if not isinstance(self.remote_path, str):
             raise RuntimeError(
-                f'Cannot serialize {type(self)}, remote_path is {self.remote_path}')
-        state = Migrating.__getstate__(self)
+                f'Cannot serialize {type(self)}, '
+                f'remote_path is {self.remote_path}')
+        state = Migrating.xjson_getstate(self)
         dfs.upload_bytes(pickle.dumps(state), self.remote_path)
 
     @classmethod
     def load(cls, remote_path: str) -> 'SavedByRemotePath':
         state = pickle.loads(dfs.download_bytes(remote_path))
         obj = cls.__new__(cls)
-        Migrating.__setstate__(obj, state)
+        Migrating.xjson_setstate(obj, state)
         return obj
 
 
-class JSONSavedByRemotePath(SavedByRemotePath):
+class SavedByRemotePathToJSON(SavedByRemotePath):
     def save(self):
         if not isinstance(self.remote_path, str):
             raise RuntimeError(
-                f'Cannot serialize {type(self)}, remote_path is {self.remote_path}')
-        state = Migrating.__getstate__(self)
-        for k in state:
-            if k == 'class':
-                continue
-            state[k] = xdumpj(state[k])
+                f'Cannot serialize {type(self)}, '
+                f'remote_path is {self.remote_path}')
+        state = Migrating.xjson_getstate(self)
+        state['class'] = self.xjson_getclass()
+        state = {k: xdumpj(v) for k, v in state.items()}
         dfs.upload_str(json.dumps(state), self.remote_path)
 
     @classmethod
-    def load(cls, remote_path: str) -> 'JSONSavedByRemotePath':
+    def load(cls, remote_path: str) -> 'SavedByRemotePathToJSON':
         state = json.loads(dfs.download_str(remote_path))
-        for k in state:
-            if k == 'class':
-                continue
-            state[k] = xloadj(state[k])
+        state = {k: xloadj(v) for k, v in state.items()}
+        cls = XJSONSerializable.xjson_loadclass(state['class'])
         obj = cls.__new__(cls)
-        Migrating.__setstate__(obj, state)
+        Migrating.xjson_setstate(obj, state)
         return obj

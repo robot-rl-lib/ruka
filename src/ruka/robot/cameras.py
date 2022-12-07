@@ -2,6 +2,8 @@ import fcntl, sys, os
 import numpy as np
 
 from .robot import Camera
+from ruka.util.compression import img2jpg
+from ruka_os.globals import CAMERA_STREAMING_FILE_TPL
 from v4l2 import *
 
 
@@ -81,26 +83,31 @@ class CloneRGBDCamera(Camera):
     both the camera in engine and to view the results
     """
 
-    def __init__(self, orig_cam, devid):
+    def __init__(self, orig_cam, devid = False, fileid = False):
         self._orig_cam = orig_cam
         width = self._orig_cam.width
         height = self._orig_cam.height
+        self.format = False
+        self.file = False
 
-        devName = f'/dev/video{devid}'
-        if not os.path.exists(devName):
-            raise NameError(f'Bad /dev/video{devid} device')
-        self.device = open(devName, 'wb')
-        format                      = v4l2_format()
-        format.type                 = V4L2_BUF_TYPE_VIDEO_OUTPUT
-        format.fmt.pix.pixelformat  = V4L2_PIX_FMT_YUYV
-        format.fmt.pix.width        = width
-        format.fmt.pix.height       = height
-        format.fmt.pix.field        = V4L2_FIELD_NONE
-        format.fmt.pix.bytesperline = width * 2
-        format.fmt.pix.sizeimage    = width * height * 2
-        format.fmt.pix.colorspace   = V4L2_COLORSPACE_JPEG
-        fcntl.ioctl(self.device, VIDIOC_S_FMT, format)
-        self.format = format
+        if not devid is False:
+            devName = f'/dev/video{devid}'
+            if not os.path.exists(devName):
+                raise NameError(f'Bad /dev/video{devid} device')
+            self.device = open(devName, 'wb')
+            format                      = v4l2_format()
+            format.type                 = V4L2_BUF_TYPE_VIDEO_OUTPUT
+            format.fmt.pix.pixelformat  = V4L2_PIX_FMT_YUYV
+            format.fmt.pix.width        = width
+            format.fmt.pix.height       = height
+            format.fmt.pix.field        = V4L2_FIELD_NONE
+            format.fmt.pix.bytesperline = width * 2
+            format.fmt.pix.sizeimage    = width * height * 2
+            format.fmt.pix.colorspace   = V4L2_COLORSPACE_JPEG
+            fcntl.ioctl(self.device, VIDIOC_S_FMT, format)
+            self.format = format
+        if not fileid is False:
+            self.file = CAMERA_STREAMING_FILE_TPL.replace('%id%', str(fileid))
  
     def start(self):
         self._orig_cam.start()
@@ -122,5 +129,11 @@ class CloneRGBDCamera(Camera):
         return self._orig_cam.height
 
     def send_frame(self, img):
-        buff = ConvertToYUYV(self.format.fmt.pix.sizeimage, self.format.fmt.pix.bytesperline, img)
-        self.device.write(buff)
+        if self.format:
+            buff = ConvertToYUYV(self.format.fmt.pix.sizeimage, self.format.fmt.pix.bytesperline, img)
+            self.device.write(buff)
+        if self.file:
+            with open(self.file, 'wb') as f:
+                f.write(img2jpg(img))
+            
+        

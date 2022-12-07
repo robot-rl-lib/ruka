@@ -1,0 +1,17 @@
+from typing import Dict
+
+
+SensorId = str
+
+
+class SensorSystem:
+    def capture(self) -> Dict[SensorId, 'Frame']:
+        '''
+        Immidiately returns the last set of frames captured.
+
+        Returns:
+            frames: dict, mapping sensor id to frame
+                sensor id is composed like {sensor_type}_{sensor_serial}
+        '''
+
+        raise NotImplementedError()

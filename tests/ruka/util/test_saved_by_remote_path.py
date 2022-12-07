@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from ruka.util.compression import img2jpg, jpg2img
 from ruka.util.json import xdumps, xloads
 from ruka.util.saved_by_remote_path import \
-    SavedByRemotePath, JSONSavedByRemotePath
+    SavedByRemotePath, SavedByRemotePathToJSON
 from ruka.util.migrating import Migrating
 from ruka_os import distributed_fs_v2 as dfs
 from typing import List
@@ -73,7 +73,7 @@ class Outer(Migrating):
 
 
 @dataclass
-class Inner(JSONSavedByRemotePath):
+class Inner(SavedByRemotePathToJSON):
     remote_path: str
     img: JPEGImage
 

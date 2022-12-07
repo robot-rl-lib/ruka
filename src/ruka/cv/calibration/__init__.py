@@ -1,4 +1,9 @@
-from .calibration import RGBDCameraCalibration, RobotCalibration, SavedRobotCalibration
+from .calibration import (
+    RGBDCameraCalibration,
+    RobotCalibration,
+    SavedRobotCalibration,
+    StaticCamera,
+)
 from .calibrator import Calibrator, CalibratorConfig
 from .checkerboard import Checkerboard
 from .sensor import Sensor
@@ -14,4 +19,5 @@ __all__ = [
     'RGBDCameraCalibration',
     'RobotCalibration',
     'SavedRobotCalibration',
+    'StaticCamera',
 ]

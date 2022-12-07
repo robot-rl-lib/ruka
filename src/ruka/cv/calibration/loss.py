@@ -1,5 +1,6 @@
 import numpy as np
 
+from collections import defaultdict
 from ruka.util.x3d import compose_matrix_world, compose_matrix_tool
 from scipy.sparse import lil_matrix
 from scipy.spatial.transform import Rotation as R
@@ -71,6 +72,13 @@ class EstimateBoardPositionsLoss(BaseLoss):
     @property
     def n_residuals(self):
         return 3 * self.points.shape[0]
+
+    def decompose_params(self, x):
+        result = {'transforms': []}
+        for i in range(self.n_boards):
+            result['transforms'].append(
+                Transformation(x[i * Transformation.N_PARAMS:(i + 1) * Transformation.N_PARAMS]))
+        return result
 
     def _transform_cb(self, x):
         transforms = [
@@ -243,3 +251,55 @@ class EstimateColorParametersLoss(BaseLoss):
             'sensor': sensor,
             'transform': transform,
         }
+
+class EstimateExtrinsicsLoss(BaseLoss):
+    def __init__(
+        self,
+        checkerboard,
+        frame_data,
+        huber_loss_delta):
+
+        super().__init__()
+
+        cb_center = np.mean(checkerboard.get_points(), axis=0)[None]
+
+        self.points = defaultdict(dict)
+        self.ids = []
+        for id, frames in frame_data.items():
+            self.ids.append(id)
+            for f in frames:
+                self.points[f.frame_index][id] = f.board_pos.transform(cb_center)
+
+        self.huber_loss_delta = huber_loss_delta
+
+    def __call__(self, x):
+        params = self.decompose_params(x)
+
+        residuals = []
+        for _, pts in self.points.items():
+            if len(pts) < 2:
+                continue
+
+            transformed = []
+            for id, p in pts.items():
+                transformed.append(p if id == self.ids[0] else params[id].transform(p))
+
+            for i in range(len(transformed)):
+                for j in range(i):
+                    residuals.append((transformed[i] - transformed[j]).squeeze())
+
+        return np.sqrt(huber(self.huber_loss_delta, np.concatenate(residuals).reshape(-1)))
+
+    @property
+    def n_params(self):
+        return (len(self.ids) - 1) * Transformation.N_PARAMS
+
+    def decompose_params(self, x) -> dict:
+        res = dict()
+
+        res[self.ids[0]] = Transformation(np.zeros(Transformation.N_PARAMS))
+        for i, id in enumerate(self.ids[1:]):
+            res[id] = Transformation(
+                x[i * Transformation.N_PARAMS:((i + 1) * Transformation.N_PARAMS)])
+
+        return res

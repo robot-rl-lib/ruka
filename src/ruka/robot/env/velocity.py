@@ -141,7 +141,7 @@ class VelocityControlRobotEnv(RobotEnv):
         if Observe.GRAY in self._observation_types:
             obs[Observe.GRAY.value] = cv2.cvtColor(rgb, cv2.COLOR_BGR2GRAY)[:,:,None].astype(np.uint8)
         if Observe.DEPTH in self._observation_types:
-            obs[Observe.DEPTH.value] = depth.astype(np.float32)
+            obs[Observe.DEPTH.value] = depth.astype(np.uint16)
         if Observe.ROBOT_POS in self._observation_types:
             obs[Observe.ROBOT_POS.value] = np.array([x, y, z, roll, pitch, yaw], dtype=np.float32)
         if Observe.GRIPPER in self._observation_types:

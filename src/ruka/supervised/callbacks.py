@@ -135,8 +135,8 @@ class ValLossCallback(Callback):
         self, 
         loss: nn.Module, 
         test_data: Iterator, 
-        n_batches: int,
         calculate_every: int,
+        n_batches: Optional[int] = None,
         prefix: str = ''
         ):
         self._test_data = test_data 
@@ -155,13 +155,14 @@ class ValLossCallback(Callback):
             return
         loss = 0
         with torch.no_grad():
-            for _ in range(self._n_batches):
-                batch = next(self._test_data)
+            for batch_num, batch in enumerate(self._test_data):
                 loss += self._loss(batch).cpu().detach().item()
-    
+                if self._n_batches and self._n_batches == batch_num + 1:
+                    break                
+
         tb.step(step)
-        tb.scalar(self.prefix + 'Validation loss', loss / self._n_batches)
-        print(f'Step {step} validation loss = {loss / self._n_batches}')
+        tb.scalar(self.prefix + 'Validation loss', loss / (batch_num + 1))
+        print(f'Step {step} validation loss = {loss / (batch_num + 1)}')
         
 
 class SaveCallback(Callback):

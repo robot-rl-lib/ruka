@@ -18,6 +18,7 @@ def oa_sequence_iterator(
     n_collect: int,
     random: bool,
     block_size: int,
+    infinity=True,
     ) -> Iterator[Dict[str, List[Union[Dictator, Array]]]]:
 
     done_idxs = []
@@ -27,8 +28,9 @@ def oa_sequence_iterator(
     dones = []
     infos = []
 
-    for i in range(n_collect):
-        path = next(it)
+    for i, path in enumerate(it):
+        if i >= n_collect:
+            break
         observations.extend(path.observations[:-1])
         actions.extend(path.actions)
         rewards.extend(path.rewards)
@@ -36,32 +38,33 @@ def oa_sequence_iterator(
         infos.extend(path.infos)
         done_idxs.append(len(observations))
         print(f"Collected {i} path")
-    idx = -1
+    
     while True:
-        # choosing next index
+        indexes = list(range(len(observations)))
         if random:
-            idx = np.random.randint(len(observations))
-        else:
-            idx += 1
-            idx = idx % len(observations)
-        # selecting left end of sequence
-        left_idx = max(idx - block_size + 1, 0)
-        for done_idx in reversed(done_idxs):
-            if done_idx < idx: # first done_idx less than idx
-                left_idx = max(done_idx + 1, left_idx)
-                break
-        observations_block = observations[left_idx : idx + 1]
-        actions_block = actions[left_idx : idx + 1]
+            np.random.shuffle(indexes)
+        for idx in indexes:
+            # selecting left end of sequence
+            left_idx = max(idx - block_size + 1, 0)
+            for done_idx in reversed(done_idxs):
+                if done_idx < idx: # first done_idx less than idx
+                    left_idx = max(done_idx + 1, left_idx)
+                    break
+            observations_block = observations[left_idx : idx + 1]
+            actions_block = actions[left_idx : idx + 1]
 
-        # padding to length. TODO: here is a leakage
-        if len(observations_block) < block_size:
-            number_to_pad = block_size - len(observations_block)
-            observations_block = \
-                [copy.deepcopy(observations_block[0]) for _ in range(number_to_pad)] + observations_block
-            actions_block = \
-                [zeros_like(actions_block[0]) for _ in range(number_to_pad)] + actions_block
+            # padding to length. TODO: here is a leakage
+            if len(observations_block) < block_size:
+                number_to_pad = block_size - len(observations_block)
+                observations_block = \
+                    [copy.deepcopy(observations_block[0]) for _ in range(number_to_pad)] + observations_block
+                actions_block = \
+                    [zeros_like(actions_block[0]) for _ in range(number_to_pad)] + actions_block
 
-        yield dict(
-            observation_sequence=observations_block,
-            action_sequence=actions_block
-        )
+            yield dict(
+                observation_sequence=observations_block,
+                action_sequence=actions_block
+            )
+    
+        if not infinity:
+            break

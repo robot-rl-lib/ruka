@@ -62,6 +62,7 @@ def load_checkpoint(
         start_from = 0
     elif dfs_checkpoint is not None:
         download_to = os.path.join(checkpoints_folder, dfs_checkpoint)
+        os.makedirs(os.path.dirname(download_to), exist_ok=True)
         dfs.download(dfs_checkpoint, download_to)
         latest_checkpoint = download_to
         start_from = 0
@@ -82,15 +83,22 @@ def load_checkpoint(
     return start_from
 
 
-def tb_data_size(episodes, prefix=''):
-    transitions = None
+def get_and_log_data_size(episodes: List[Episode], prefix: str='') -> Union[None, int]:
+    """
+    Calculate transition nums and episodes nums. Log its in stdout/tensorboard
+    Return:
+        None/int : Num transitions. None if can not calculate
+    """
+    num_transitions = None
     for s in [0, 1000]:
         tb.step(s)
         tb.scalar(f'data/{prefix}_ep_num', len(episodes))
         if episodes and hasattr(episodes[0], 'actions'):
-            transitions = np.sum([len(ep.actions) for ep in episodes])
-            tb.scalar(f'data/{prefix}_transition_num', transitions)
+            num_transitions = np.sum([len(ep.actions) for ep in episodes])
+            tb.scalar(f'data/{prefix}_transition_num', num_transitions)
 
     print(f"{prefix} episodes:", len(episodes))
-    if transitions:
-        print(f"{prefix} transitions:", transitions)
+    if num_transitions:
+        print(f"{prefix} num_transitions:", num_transitions)
+        
+    return num_transitions
