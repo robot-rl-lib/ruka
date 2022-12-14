@@ -79,9 +79,10 @@ class SafetyWrapper(gym.Wrapper):
 
 class RandomReplaceOnSuccess(gym.Wrapper):
 
-    def __init__(self, env, min_x, max_x, min_y, max_y, min_z, max_z, max_yaw=None, min_yaw=None):
+    def __init__(self, env, min_x, max_x, min_y, max_y, min_z, max_z, max_yaw=None, min_yaw=None, center=False):
         self.env = env
         self._robot_env = get_supported_robot_env(env,'_robot')._robot
+        self._center = center
 
         self._min_x = min_x
         self._max_x = max_x
@@ -96,11 +97,22 @@ class RandomReplaceOnSuccess(gym.Wrapper):
         obs, r, done, info = self.env.step(action)
         if done and info['is_success']:
             try:
-                self._robot_env.go_to_random(
-                    self._min_x, self._max_x,
-                    self._min_y, self._max_y,
-                    self._max_yaw, self._min_yaw
-                )
+                if self._center:                
+                    center_x = self._min_x + (self._max_x - self._min_x) / 2
+                    center_y = self._min_y + (self._max_y - self._min_y) / 2
+                    center_yaw = self._min_yaw + (self._max_yaw - self._min_yaw) / 2
+                    self._robot_env.go_to_random(
+                        center_x - 1, center_x + 1,
+                        center_y - 1, center_y + 1,
+                        center_yaw - 1, center_yaw + 1,
+                    )
+                else:
+                    self._robot_env.go_to_random(
+                        self._min_x, self._max_x,
+                        self._min_y, self._max_y,
+                        self._max_yaw, self._min_yaw
+                    )
+
             except RobotError as e:
                 print('Robot error while random replace. No need to do anything, just reset')
         return obs, r, done, info

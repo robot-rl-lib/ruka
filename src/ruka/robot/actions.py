@@ -6,7 +6,7 @@ from typing import Tuple, Union
 
 from ruka.environments.common.controller import Controller
 from ruka.robot.robot import ArmInfo, ArmPosControlled, ArmVelControlled, \
-    GripperPosControlled, Robot, ControlMode
+    GripperPosControlled, Robot, ControlMode, RobotRecoverableError
 from ruka.util.x3d import Vec3, chain, compose_matrix_tool, \
     compose_matrix_world, decompose_matrix_world
 from ruka.robot.collision import CollisionDetector
@@ -148,6 +148,47 @@ class CollisionAwareVelWorldOverRobot(VelWorldOverRobot):
     def act(self, action):
         action['xyz'] = self._detector.test_vel(action['xyz'])
         super().act(action)
+
+
+class RestrictedYawVelWorld(VelWorld):
+    '''
+    Restrict TCP yaw angle
+    '''
+
+    def __init__(self, vel_c: VelWorld, robot_c: RobotController, arm_info: ArmInfo, restrictions: Tuple[float, float]):
+        '''
+        :param vel_c: Any VelWorld controller
+        :param robot_c: Any RobotController supporting RobotAction.HOLD
+        :param arm_info: ArmInfo object reporting angles property
+        :param restrictions: Tuple of min and max yaw angles, 0 matches home yaw angle of TCP (90 degrees by convention)
+        '''
+
+        self._vel_c = vel_c
+        self._robot_c = robot_c
+        self._arm_info = arm_info
+        self._restrictions = restrictions
+
+    def reset(self):
+        self._vel_c.reset()
+
+    def act(self, action):
+        l, h = self._restrictions
+        yaw = self._arm_info.angles[2]
+        if yaw < -90:
+            yaw += 360
+        yaw -= 90
+        if yaw > h or yaw < l:
+            self._robot_c.act(RobotAction.HOLD.value)
+            raise RobotRecoverableError('Yaw restriction violated! Limits are (%f, %f) and yaw is %f' % (l, h, yaw))
+        self._vel_c.act(action)
+
+    @property
+    def pos_limits(self) -> Tuple[Vec3, Vec3]:
+        return self._vel_c.pos_limits
+
+    @property
+    def angle_limits(self) -> Tuple[Vec3, Vec3]:
+        return self._vel_c.angle_limits
 
 
 class VelToolOverWorld(CartesianController):
@@ -373,7 +414,7 @@ class GripperAndMove(Controller):
         if action['gripper'] != self._last_gripper_action:
             self._gripper_c.act(action['gripper'])
             self._last_gripper_action = action['gripper']
-            
+
         self._move_c.act(action['move'])
 
 

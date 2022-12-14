@@ -2,6 +2,7 @@ import pathlib
 from dataclasses import dataclass
 from typing import Iterator, List, Optional, Callable
 import os
+from torch.optim.lr_scheduler import _LRScheduler
 
 import torch
 from ruka.models.losses.base import Loss
@@ -40,6 +41,12 @@ class TrainConfig:
     dfs_checkpoint: Optional[str] = None
     local_checkpoint: Optional[str] = None
 
+    lr_scheduler: Optional[_LRScheduler] = None
+
+def _get_lr(optimizer):
+    for param_group in optimizer.param_groups:
+        return param_group['lr']
+
 
 def train(config: TrainConfig) -> None:
     train_data = config.train_data
@@ -69,6 +76,8 @@ def train(config: TrainConfig) -> None:
         loss_module.log_stats(step, prefix='training/')
         if (step + 1) % config.checkpoint_every == 0:
             save_checkpoint(step, dict(loss=loss_module, optimizer=optimizer), config.checkpoint_path) 
-        print(f"Step {step}")
+        print(f"Step {step} LR {_get_lr(optimizer)}")
+        if config.lr_scheduler is not None:
+            config.lr_scheduler.step()
     
     print("finished!")

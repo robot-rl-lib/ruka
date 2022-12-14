@@ -56,6 +56,32 @@ KEYMAP_KEYBOARD_6DOF = {
     'yaw': DiscreteAxis(ecodes.KEY_J, ecodes.KEY_L),
 }
 
+KEYMAP_KEYBOARD_6DOF_UNREAL = {
+    'x': DiscreteAxis(ecodes.KEY_A, ecodes.KEY_D),
+    'y': DiscreteAxis(ecodes.KEY_SPACE, ecodes.KEY_C),
+    'z': DiscreteAxis(ecodes.KEY_S, ecodes.KEY_W),
+    'roll': DiscreteAxis(ecodes.KEY_Q, ecodes.KEY_E),
+    'pitch': DiscreteAxis(ecodes.KEY_DOWN, ecodes.KEY_UP),
+    'yaw': DiscreteAxis(ecodes.KEY_LEFT, ecodes.KEY_RIGHT),
+    'gripper': DiscreteTrigger(ecodes.KEY_LEFTSHIFT),
+    'speed': DiscreteTrigger(ecodes.KEY_RIGHTSHIFT),
+    'home': DiscreteTrigger(ecodes.KEY_HOME),
+    'exit': DiscreteTrigger(ecodes.KEY_ESC),
+}
+
+KEYMAP_KEYBOARD_6DOF_GOLDENAXE = {
+    'x': DiscreteAxis(ecodes.KEY_4, ecodes.KEY_6),
+    'y': DiscreteAxis(ecodes.KEY_8, ecodes.KEY_2),
+    'z': DiscreteAxis(ecodes.KEY_C, ecodes.KEY_SPACE),
+    'roll': DiscreteAxis(ecodes.KEY_7, ecodes.KEY_9),
+    'pitch': DiscreteAxis(ecodes.KEY_S, ecodes.KEY_W),
+    'yaw': DiscreteAxis(ecodes.KEY_A, ecodes.KEY_D),
+    'gripper': DiscreteTrigger(ecodes.KEY_5),
+    'speed': DiscreteTrigger(ecodes.KEY_LEFTSHIFT),
+    'home': DiscreteTrigger(ecodes.KEY_HOME),
+    'exit': DiscreteTrigger(ecodes.KEY_ESC),
+}
+
 # ---------------------------------------------------------------------- HID --
 
 @dataclass

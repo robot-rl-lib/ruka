@@ -8,6 +8,8 @@ import pybullet as p
 import tensorflow as tf
 
 from manipulation_main.common import io_utils, transform_utils, camera_utils
+from ruka.robot.cameras import visualize_camera
+
 
 class OnGripperCamera:
     def __init__(self, config, robot, randomize=True):
@@ -21,6 +23,7 @@ class OnGripperCamera:
         self._randomize = config.randomize if randomize else None
         self._construct_camera(self._camera_info, self._transform)
 
+        
 
 
 
@@ -67,6 +70,7 @@ class OnGripperCamera:
         self._h_robot_camera = transform
 
 
+@visualize_camera('sn', lambda frame, obj: frame[0], 'render_images')
 class RGBDCamera:
     """OpenCV compliant camera model using PyBullet's built-in renderer.
 
@@ -74,11 +78,13 @@ class RGBDCamera:
         info (CameraInfo): The intrinsics of this camera.
     """
 
-    def __init__(self, physics_client, config):
+    def __init__(self, physics_client, config, sn: str = 'main'):
         self._physics_client = physics_client
         self.info = camera_utils.CameraInfo.from_dict(config)
         self._near = config['near']
         self._far = config['far']
+
+        self.sn = sn
 
         self.projection_matrix = _build_projection_matrix(
             self.info.height, self.info.width, self.info.K, self._near, self._far)

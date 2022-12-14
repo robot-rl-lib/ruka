@@ -138,6 +138,9 @@ class RobotEnv(World):
                                         )
             
 
+    def get_observation(self):
+        return self.obs
+
     def _observe(self):
         rgb, depth, mask = self._camera.get_state()
         observation = dict()

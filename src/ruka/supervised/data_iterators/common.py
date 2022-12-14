@@ -1,10 +1,11 @@
-import time
-from typing import Callable, Iterator, List, Dict
-from ruka.types import Dictator
-from ruka.environments.common.env import Observation
-from typing import Any
-from ruka.util.collate import default_collate_fn
 import collections
+import random
+
+from typing import Any, Callable, Dict, Iterable, Iterator, List, TypeVar
+from ruka.environments.common.env import Observation
+from ruka.types import Dictator
+from ruka.util.collate import default_collate_fn, default_collate_fn2
+
 
 def batchify(
     it: Iterator[Dict[str, Any]],
@@ -46,7 +47,6 @@ class Batchify():
         self._partly_batch = partly_batch
         self._stop_iter = False
 
-
     def __iter__(self):
         self._stop_iter = False
         self._it = self._make_iter()
@@ -79,3 +79,50 @@ class Batchify():
                 return self.__next__()
 
 
+class ShuffleInplace(collections.abc.Iterable):
+    def __init__(self, data_list: List):
+        self._data_list = data_list
+
+    def __iter__(self) -> Iterator:
+        random.shuffle(self._data_list)
+        return iter(self._data_list)
+
+
+def repeat(iterable) -> Iterator:
+    while True:
+        for x in iterable:
+            yield x
+
+
+T = TypeVar("T")
+U = TypeVar("U")
+
+def batchify2(
+    it: Iterator[T],
+    batch_size: int,
+    collate_fn: Callable[[List[T]], U] = default_collate_fn2
+    ) -> Iterator[U]:
+    batch = []
+    for x in it:
+        if len(batch) == batch_size:
+            yield collate_fn(batch)
+            batch = []
+        batch.append(x)
+
+    yield collate_fn(batch)
+
+
+class Batchify2(collections.abc.Iterable):
+    def __init__(
+        self,
+        iterable: Iterable[T],
+        batch_size: int,
+        collate_fn: Callable[[List[T]], U] = default_collate_fn2
+        ):
+
+        self._iterable = iterable
+        self._batch_size = batch_size
+        self._collate_fn = collate_fn
+        
+    def __iter__(self) -> Iterator[U]:
+        return batchify2(iter(self._iterable), self._batch_size, self._collate_fn)

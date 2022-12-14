@@ -19,6 +19,7 @@ def oa_sequence_iterator(
     random: bool,
     block_size: int,
     infinity=True,
+    obs_preprocess_fn=None,
     ) -> Iterator[Dict[str, List[Union[Dictator, Array]]]]:
 
     done_idxs = []
@@ -60,7 +61,8 @@ def oa_sequence_iterator(
                     [copy.deepcopy(observations_block[0]) for _ in range(number_to_pad)] + observations_block
                 actions_block = \
                     [zeros_like(actions_block[0]) for _ in range(number_to_pad)] + actions_block
-
+            if obs_preprocess_fn is not None:
+                observations_block = [obs_preprocess_fn(obs) for obs in observations_block]
             yield dict(
                 observation_sequence=observations_block,
                 action_sequence=actions_block

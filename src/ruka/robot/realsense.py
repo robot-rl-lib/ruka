@@ -1,4 +1,5 @@
 from .robot import Camera
+from .cameras import visualize_camera
 
 import numpy as np
 
@@ -17,6 +18,7 @@ class RealsenseConfig:
     warmup_frames: int = 30  # first captured frames are dark, skip them
 
 
+@visualize_camera('_sn', lambda frame, obj: frame[:,:,:3] if obj._enable_color else None )
 class RealsenseCamera(Camera):
     def __init__(self, config: RealsenseConfig):
         self._width = config.width
@@ -24,6 +26,7 @@ class RealsenseCamera(Camera):
         self._enable_color = config.enable_color
         self._enable_infrared = config.enable_infrared
         self._warmup_frames = config.warmup_frames
+        self._sn = config.serial_number
 
         self._pipeline = rs.pipeline()
         self._config = rs.config()
