@@ -160,6 +160,11 @@ class VelocityControlRobotEnv(RobotEnv):
         y_new = np.random.uniform(y_min+1, y_max-1)
         yaw_new = np.random.uniform(yaw_min, yaw_max) if yaw_min is not None and yaw_max is not None else yaw
 
+        if yaw_new != yaw:
+            # fix for over twisting while random reset
+            if yaw <=yaw_min or yaw >= yaw_max:
+                yaw_new = yaw
+
         # TODO: not use robot.set_pos directly -> move to separate pos actions
         self.robot.set_pos([x_new, y_new, z], [roll, pitch, yaw_new])
         self.robot.set_gripper_pos(self.gripper_open_position)

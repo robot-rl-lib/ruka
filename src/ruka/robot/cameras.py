@@ -1,15 +1,22 @@
+import atexit
 import copy
 import cv2
 import fcntl, sys, os
 import numpy as np
+import socket
+import struct
 import threading
 import time
 
-from .perception.sensor_system import SensorSystem
 from .robot import Camera
+from enum import Enum
 from functools import wraps
+from pathlib import Path
 from ruka.util.compression import img2jpg
-from ruka_os.globals import streaming_file_from_id, get_infra_setup
+from ruka_os.globals import streaming_file_from_id, get_infra_setup, \
+                            streaming_sock_from_id, streaming_info_from_file, \
+                            LIVE_STREAMING_TIME_DELTA
+from typing import Dict, Tuple, Any
 from v4l2 import *
 
 class FakeRGBDCamera(Camera):
@@ -142,6 +149,24 @@ class CloneRGBDCamera(Camera):
                 f.write(img2jpg(img))
 
 
+def is_streaming_live(fn: str):
+    info_file = streaming_info_from_file(fn)
+    if not sys.path.isfile(f):
+        return False
+    mtime = os.path.getmtime(info_file)
+    tnow = time.time()
+    return tnow - mtime < LIVE_STREAMING_TIME_DELTA
+
+
+def update_streaming_live(fn: str, prev_update_ts: float) -> float:
+    tnow = time.time()
+    if tnow - prev_update_ts < LIVE_STREAMING_TIME_DELTA / 2:
+        return prev_update_ts
+    info_file = streaming_info_from_file(fn)
+    Path(info_file).touch()
+    return tnow
+
+
 def visualize_camera(sn_field: str, extract = lambda frame,obj: frame, capture_method: str = 'capture'):
     """
     Decorator for the camera to extract image and send it to cloning file:
@@ -184,7 +209,7 @@ def visualize_camera(sn_field: str, extract = lambda frame,obj: frame, capture_m
                     if not clonecam:
                         return result
 
-                    obj.debug_visualizer = get_image_streamer(clonecam.get('fileid'))
+                    obj.debug_visualizer = get_image_streamer(clonecam, cls)
 
                 if obj.debug_visualizer:
                     t = extract(result, obj)
@@ -198,6 +223,135 @@ def visualize_camera(sn_field: str, extract = lambda frame,obj: frame, capture_m
         return cls
     return decorator
 
+
+class MasterCamera(Camera):
+
+    # keep slave as a class variable
+    def __init__(self, slave):        
+        self.slave = slave
+        self.begin()
+
+    def begin(self):
+        # MT thread
+        self.started = False
+        self.closing = False
+
+        # event + lock
+        self.pic_lock = threading.Lock()
+        self.pic_updated_event = threading.Event()
+        self.pic_updated_took = threading.Event()
+
+        # shared data object so we should lock when reading
+        self.last_pic = []
+        self.wants = False
+ 
+        # create and launch thread
+        self.t1 = threading.Thread(target=self.worker)
+        self.t1.daemon = True
+        
+
+    def worker(self):
+        """
+        Waiting for the event from a main thread,
+        then copy passed data to local var, which later encoded to JPEG
+        and written to our streaming file
+        """
+        while not self.closing:
+            self.last_pic = self.slave.capture()
+            if self.wants:
+                self.pic_updated_took.clear()
+                self.pic_updated_event.set()
+                if not self.pic_updated_event.wait():
+                    raise NotImplementedError('what to do in this case?!')
+
+    # stop on emregncy when deleting MasterCamera - ouch - never!
+    def __del__(self):
+        #Carefully stops thread
+        if self.started:
+            self.closing = True
+            self.t1.join()
+            if self.slave:
+                self.slave.stop()
+
+    def force_stop(self):
+        if self.started:
+            self.closing = True
+            self.t1.join()
+            if self.slave:
+                self.slave.stop()
+
+    def reload(self, slave):
+        if self.started:
+            self.closing = True
+            self.t1.join()
+            self.slave.stop()
+        self.slave = slave
+        self.begin()
+
+    # start only once and keep the slave
+    def start(self):
+        if not self.started:
+            self.slave.start()
+            self.started = True
+            self.t1.start()
+
+    # we do not stop the slave - never
+    def stop(self):
+        pass
+
+    def capture(self):
+        self.pic_updated_event.clear()
+        self.wants = True
+        if not self.pic_updated_event.wait():
+            raise NotImplementedError('what to do in this case?!')
+        self.wants = False
+        picdata = copy.deepcopy(self.last_pic)
+        self.pic_updated_took.set()
+
+        return picdata
+
+    @property
+    def width(self):
+        return self.slave.width
+
+    @property
+    def height(self):
+        return self.slave.height
+
+instances = {}
+def slaveize_camera(sn_field: str, config_field: str):
+    """
+    Decorator for the camera to slaveize it under master
+
+    Master reads at 30 fps, but slave may be slower!
+    """
+    def decorator(cls):        
+        def getinstance(*args, **kwargs):
+            global instances
+            cam = cls(*args, **kwargs)
+            sn = getattr(cam, sn_field)
+            config = getattr(cam, config_field)
+            uid = (cls, sn)
+            if uid in instances:
+                if instances[uid]['config'] != config:
+                    instances[uid]['camera'].reload(cam)
+                    instances[uid]['config'] = config
+            if uid not in instances:
+                instances[uid] = {
+                    'config': config,
+                    'camera': MasterCamera(cam)
+                }
+            return instances[uid]['camera']
+        return getinstance
+    return decorator
+
+
+def exit_handler():
+    global instances
+    for ins in instances:
+        instances[ins]['camera'].force_stop()
+
+atexit.register(exit_handler)
 
 @visualize_camera('sn')
 class TestCamera(Camera):
@@ -224,12 +378,65 @@ class TestCamera(Camera):
     def height(self):
         return 720
 
-    def visualize(self, frame, sn):
+
+@slaveize_camera('sn', 'config')
+@visualize_camera('sn')
+class MockCamera(Camera):
+    def __init__(self, config):
+        self.sn = '111'
+        self.config = config
+
+    def start(self):
         pass
+
+    def stop(self):
+        pass
+
+    def capture(self) -> np.ndarray:
+        from PIL import Image
+        time.sleep(0.02)
+        return np.array(Image.new('RGB', (300, 300), color = 'red'))
+
+    @property
+    def width(self):
+        return 200
+
+    @property
+    def height(self):
+        return 200
+
+
+class StreamTo(Enum):
+    FILE = 'file'
+    SOCK = 'sock'
+
+
+class StreamDataTransfer:
+    def __init__(self, obj):
+        self.obj = obj
+
+    def generate_data():
+        raise NotImplementedError()
+
+
+class StreamDataLatency(StreamDataTransfer):
+    def generate_data(self):
+        data = time.time()
+        #print(data, end='\r')
+        return data
+
+
+def stream_key_from_config(stream: Dict) -> Tuple:
+    id = False
+    if stream.get('fileid'):
+        return StreamTo.FILE, stream.get('fileid')
+    if stream.get('sockid'):
+        return StreamTo.SOCK, stream.get('sockid')
+    raise NotImplementedError()
 
 
 streamers = {}
-def get_image_streamer(id: int):
+def get_image_streamer(config: Dict, cls: Any = False):
     """
     Resturns an object of StreamImagesToFile
     if the object was already created returns it
@@ -237,30 +444,42 @@ def get_image_streamer(id: int):
     So we do not re-run any thread for each launch of the camera streaming
     """
     global streamers
+
+    stype, id = stream_key_from_config(config)
+    data_transfer = False
+    resize = False
+    if config.get('clone_from'):
+        if config.get('clone_from').get('data_transfer'):
+            data_transfer = config.get('clone_from').get('data_transfer')
+            if not callable(data_transfer.get('data_generator')):
+                raise ValueError('data_generator field is not callable')
+            data_transfer['get_data'] = data_transfer.get('data_generator')(cls)
+        if config.get('clone_from').get('resize'):
+            resize = config.get('clone_from').get('resize')
     
-    sid = f'{id}'
+    sid = f'{stype}-{id}'
     if streamers.get(sid):
         return streamers.get(sid)
 
-    streamers[sid] = StreamImagesToFile(id)
+    if stype == StreamTo.FILE:
+        streamers[sid] = StreamImagesToFile(id, data_transfer=data_transfer, resize=resize)
+    elif stype == StreamTo.SOCK:
+        streamers[sid] = StreamImagesToSocket(id, data_transfer=data_transfer, resize=resize)
+    else:
+        raise NotImplementedError()
 
     return streamers[sid]
 
 
-class StreamImagesToFile():
+class StreamImagesTo():
     """
     Send image to file and not wasting too much time from main thread
     when encoding and writing JPG
     """
-    def __init__(self, fileid: int, use_cv2 : bool = False):
+    def __init__(self, data_transfer = False, resize = False):
         """
-        Initilize our thread for writing frames to a streaming file
-
-        fileid - the number of the port we are streaming from file
-        defined in streaming_file_from_id(fileid)
+        Initilize our thread for writing frames to a streaming engine
         """
-        self.file = streaming_file_from_id(fileid)
-
         self.closing = False
 
         # event + lock
@@ -275,7 +494,22 @@ class StreamImagesToFile():
         # shared data object so we should lock when reading
         self.picdata = []
 
-        self.use_cv2 = use_cv2
+        self.prepare_data_transfer(data_transfer)
+
+        self.debug = True if os.environ.get('RUKA_DEBUG_STREAM') else False
+        self.debug_n = 0
+        self.debug_ts = -1
+
+        self.live_udpate_ts = 0
+
+        self.resize = False
+        if resize:
+            if not resize.get('width'):
+                raise ValueError('Resize for stream is wrong: width not set')
+            if not resize.get('height'):
+                raise ValueError('Resize for stream is wrong: height not set')
+            self.resize = resize
+
     
     def __del__(self):
         """
@@ -285,12 +519,16 @@ class StreamImagesToFile():
         self.pic_updated_event.set()
         self.t1.join()
 
+    def stream_image(self, pic_data):
+        raise NotImplementedError()
+
     def worker(self):
         """
         Waiting for the event from a main thread,
         then copy passed data to local var, which later encoded to JPEG
         and written to our streaming file
         """
+        fn = self.get_streaming_file()
         while True:
             ret = self.pic_updated_event.wait(timeout=1)
             if self.closing:
@@ -301,11 +539,29 @@ class StreamImagesToFile():
             self.pic_lock.acquire()
             pic_data = copy.deepcopy(self.picdata)
             self.pic_lock.release()
-            if self.use_cv2:
-                cv2.imwrite(self.file, pic_data)
-            else:
-                with open(self.file, 'wb') as f:
-                    f.write(img2jpg(pic_data))
+
+            if self.resize:
+                pic_data = self.resize_pic(pic_data, self.resize)
+
+            if self.debug:
+                self.debug_n += 1
+                if self.debug_ts == -1:
+                    self.debug_ts = time.perf_counter()
+                else:
+                    if self.debug_n % 100 == 0:
+                        b = time.perf_counter()-self.debug_ts
+                        x = self.debug_n / b
+                        print(f'DEBUG - streaming FPS: {x}')
+                        self.debug_n = 0
+                        self.debug_ts = time.perf_counter()
+
+            if fn:
+                self.live_udpate_ts = update_streaming_live(fn, self.live_udpate_ts)
+
+            if self.data_transfer:
+                pic_data = self.inject_data(pic_data)
+                
+            self.stream_image(pic_data)
 
     def write(self, img):
         """
@@ -316,4 +572,149 @@ class StreamImagesToFile():
         self.picdata = copy.deepcopy(img)
         self.pic_lock.release()
         self.pic_updated_event.set()
+
+    def prepare_data_transfer(self, info):
+        if not info:
+            self.data_transfer = False
+            return
+
+        self.data_transfer = True
+        self.data_transfer_info = info
+
+        # try one QR code generation and get w and h
+        qr = self.data_to_qr('')
+        w, h, _ = qr.shape
+        if self.data_transfer_info['width'] < w or self.data_transfer_info['height'] < h:
+            raise ValueError('Generated QR code dimentions exceeds what we expect')
+        
+        self.injection_qr_w = self.data_transfer_info['width']
+        self.injection_qr_h = self.data_transfer_info['height']
+
+        if not self.data_transfer_info.get('get_data'):
+            raise ValueError('get_data is not set')
+
+        self.injection_data_generator = self.data_transfer_info['get_data']
+
+    def data_to_qr(self, text):        
+        import qrcode
+        qr = qrcode.QRCode(version = self.data_transfer_info.get('qr_version', 1),
+                           box_size = self.data_transfer_info.get('qr_boxsize', 2),
+                           border = self.data_transfer_info.get('qr_border', 1))
+        qr.add_data(text)        
+        qr.make(fit = False)
+        img = qr.make_image(fill_color = '#010101', back_color = 'white')
+        qrimg = np.array(img)
+        return qrimg
+
+    def inject_data(self, pic_data):        
+        from PIL import Image
+
+        # get the data
+        text = self.injection_data_generator.generate_data()
+
+        # generate new image
+        in_h, in_w, _ = pic_data.shape
+        w = in_w + self.injection_qr_w
+        h = max(in_h, self.injection_qr_h)
+        fakeimg = np.array(Image.new('RGB', (w, h), color = 'white'))
+        
+        # copy input image
+        fakeimg[:in_h,self.injection_qr_w:,:] = pic_data[:,:,:]
+
+        # copy qr code
+        qr = self.data_to_qr(text)
+        qr_w, qr_h, _ = qr.shape
+        fakeimg[:qr_w,:qr_h,:] = qr[:,:,:]
+
+        return fakeimg
+        
+    def resize_pic(self, pic_data, resize):
+        return cv2.resize(pic_data, dsize=(resize['width'], resize['height']), interpolation=cv2.INTER_LINEAR)
+
+    def get_streaming_file(self):
+        return None
+    
+
+class StreamImagesToFile(StreamImagesTo):
+    """
+    Send image to file and not wasting too much time from main thread
+    when encoding and writing JPG
+    """
+    def __init__(self, fileid: int, data_transfer = False, resize = False, use_cv2 : bool = False):
+        """
+        Initilize our thread for writing frames to a streaming file
+
+        fileid - the number of the port we are streaming from file
+        defined in streaming_file_from_id(fileid)
+        """
+        self.file = streaming_file_from_id(fileid)
+        super().__init__(data_transfer=data_transfer, resize=resize)        
+        self.use_cv2 = use_cv2
+
+    def stream_image(self, pic_data):
+        if self.use_cv2:
+            cv2.imwrite(self.file, pic_data)
+        else:
+            with open(self.file, 'wb') as f:
+                f.write(img2jpg(pic_data))
+
+    def get_streaming_file(self):
+        return self.file
+
+
+class StreamImagesToSocket(StreamImagesTo):
+    """
+    Send image to file and not wasting too much time from main thread
+    when encoding and writing JPG
+    """
+    def __init__(self, sockid: int, data_transfer = False, resize = False):
+        """
+        Initilize our thread for writing frames to a streaming socket
+
+        sockid - the number of the port we are streaming from socket
+        defined in streaming_sock_from_id(sockid)
+        """
+        self.sock_file = streaming_sock_from_id(sockid)
+        super().__init__(data_transfer=data_transfer, resize=resize)
+        self.sock = False
+
+    def __del__():
+        super().__del__()
+        if self.sock:
+            self.sock.close()
+
+    def open_socket(self):
+        try:
+            self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self.sock.connect(self.sock_file)
+        except:
+            self.kill_socket()            
+            return False
+        return True
+
+    def kill_socket(self):
+        if self.sock:
+            self.sock.close()
+            self.sock = False
+        
+    def check_sock(self):
+        if not self.sock:
+            return self.open_socket()
+        return True
+   
+    def stream_image(self, pic_data):
+        if not self.check_sock():
+            return
+        jpg = img2jpg(pic_data)
+        size = len(jpg)
+        crc = 0
+        header = bytearray(struct.pack('<ccLL', b'R', b'K', socket.htonl(size), socket.htonl(crc)))
+        try:
+            self.sock.send(header)
+            self.sock.send(jpg)
+        except:
+            self.kill_socket()
+
+    def get_streaming_file(self):
+        return self.sock_file
 

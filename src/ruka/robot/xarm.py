@@ -20,7 +20,7 @@ from ruka.util.x3d import Vec3, conventional_rotation
 
 
 from .robot import \
-    RobotRecoverableError, RobotUnrecoverableError, ArmInfo, ArmPosControlled, ArmVelControlled, ArmPosVelControlled, \
+    RobotError, RobotRecoverableError, RobotUnrecoverableError, ArmInfo, ArmPosControlled, ArmVelControlled, ArmPosVelControlled, \
     GripperInfo, GripperPosControlled, ControlMode
 
 logging.basicConfig()
@@ -186,7 +186,7 @@ class _XArm(ArmInfo, GripperInfo, GripperPosControlled):
 
     def check(self):
         if self._api.has_error:
-            _raise_for_code(self._api, self._api.error_code)
+            _raise_for_code(self._api, APIState.HAS_ERROR)
 
     # - ArmInfo - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
@@ -455,10 +455,11 @@ class XArmVelOverPosControlled(ArmInfo, GripperInfo, GripperPosControlled, ArmPo
                 if not self._accept_move_commands:
                     return
                 angles = ruka_to_xarm(angles)
+                self._api.set_tcp_jerk(self._config.max_jerk)
                 self._api.set_position(
                     x=pos[0], y=pos[1], z=pos[2],
                     roll=angles[0], pitch=angles[1], yaw=angles[2],
-                    speed=speed, is_radian=False, wait=False
+                    speed=speed, is_radian=False, wait=False, mvacc=self._config.max_acc
                 )
 
             @property
@@ -470,20 +471,31 @@ class XArmVelOverPosControlled(ArmInfo, GripperInfo, GripperPosControlled, ArmPo
         vel = np.zeros((3,))
         angular_vel = np.zeros((3,))
         control_mode = None
+        error = None
         try:
             while True:
                 if conn.poll():
                     try:
                         action, args = conn.recv()
-                        if action == 'set_vel':
-                            vel = np.array(args[0])
-                            angular_vel = np.array(args[1])
-                            conn.send(None)
-                        elif action == 'park':
+                        if action == 'park':
                             pos_control.park()
+                            error = None
+                            control_mode = None
                             conn.send(None)
                         elif action == 'hold':
                             pos_control.hold()
+                            error = None
+                            control_mode = None
+                            conn.send(None)
+                        elif action == 'relax':
+                            pos_control.relax()
+                            error = None
+                            control_mode = None
+                            conn.send(None)
+                        elif action == 'go_home':
+                            pos_control.go_home()
+                            error = None
+                            control_mode = None
                             conn.send(None)
                         elif action == 'steady':
                             control_mode = args[0]
@@ -491,12 +503,13 @@ class XArmVelOverPosControlled(ArmInfo, GripperInfo, GripperPosControlled, ArmPo
                                 vel = np.zeros((3,))
                                 angular_vel = np.zeros((3,))
                             pos_control.steady()
+                            error = None
                             conn.send(None)
-                        elif action == 'relax':
-                            pos_control.relax()
-                            conn.send(None)
-                        elif action == 'go_home':
-                            pos_control.go_home()
+                        elif error:
+                            conn.send(error)
+                        elif action == 'set_vel':
+                            vel = np.array(args[0])
+                            angular_vel = np.array(args[1])
                             conn.send(None)
                         elif action == 'check':
                             pos_control.check()
@@ -523,11 +536,18 @@ class XArmVelOverPosControlled(ArmInfo, GripperInfo, GripperPosControlled, ArmPo
                     except Exception as e:
                         traceback.print_exc()
                         conn.send(e)
-                if control_mode == ControlMode.VEL and pos_control.accept_move_commands:
+                if not error and control_mode == ControlMode.VEL and pos_control.accept_move_commands:
                     speed = np.linalg.norm(vel)
+                    angular_speed = np.linalg.norm(angular_vel)
+                    speed = max(speed, angular_speed)
+                    if speed > config.max_speed:
+                        speed = config.max_speed
                     pos = np.array(pos_control.pos)
                     angles = np.array(pos_control.angles)
-                    pos_control.set_pos(list(pos + vel), list(angles + angular_vel), speed)
+                    try:
+                        pos_control.set_pos(list(pos + vel), list(angles + angular_vel), speed)
+                    except RobotError as e:
+                        error = e
                 time.sleep(dt)
         except:
             traceback.print_exc()
@@ -692,6 +712,8 @@ def _raise_for_code(xarm, code):
         raise XArmAPIError(code, "Emergency stop occured")
     elif code == APIState.HAS_ERROR:
         error_code = xarm.error_code
+        if error_code == 0:
+            return
         if error_code >= 1 and error_code <= 3:
             raise XArmControllerUnrecoverableError(error_code, "Emergency stop occured")
         elif error_code >= 10 and error_code <= 17:

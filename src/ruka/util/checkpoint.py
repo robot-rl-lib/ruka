@@ -1,6 +1,7 @@
 import tempfile
 import torch as t
 import ruka.util.distributed_fs as dfs
+from types import ModuleType
 
 
 def get_state_subdict(state_dict, prefix: str):
@@ -23,7 +24,7 @@ def get_state_subdict(state_dict, prefix: str):
     return model_state_dict
 
 
-def load_remote_state_dict(remote_ckpt_path: str):
+def load_remote_state_dict(remote_ckpt_path: str, other_dfs: ModuleType = None):
     """
     Loads policy state dict from the checkpoint on dfs.
     Args:
@@ -32,7 +33,5 @@ def load_remote_state_dict(remote_ckpt_path: str):
     Returns:
         state dict: PyTorch state dict.
     """
-    # parallel writing to the same file guaranteed only on Unix
-    with tempfile.NamedTemporaryFile() as f:
-        dfs.download(remote_ckpt_path, f.name)
-        return t.load(f.name)
+    local_path = dfs.cached_download(remote_ckpt_path, other_dfs=other_dfs)
+    return t.load(local_path)

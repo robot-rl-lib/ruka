@@ -12,6 +12,7 @@ from ruka.environments.common.env import Episode
 from ruka.util.compression import \
     compress_everything_maybe, decompress_everything_maybe
 from ruka_os import distributed_fs_v2 as dfs
+from ruka.util import distributed_fs as dfs_util
 
 from .logger import \
     Logger, LogReader, FPSParams, create_ruka_logger, create_ruka_log_reader
@@ -76,6 +77,13 @@ def load_episode(remote_path: str) -> Episode:
     Load episode, previously saved by save_episode().
     """
     return _load_episode(remote_path)
+
+
+def cached_load_episode(remote_path: str) -> Episode:
+    """
+    Load episode, previously saved by save_episode().
+    """
+    return _cached_load_episode(remote_path)
 
 
 # ----------------------------------------------------------- Implementation --
@@ -190,6 +198,14 @@ def _load_episode(remote_path: str) -> Episode:
         local_path = f'{tmpdir}/log'
         dfs.download_and_unpack(remote_path, local_path)
 
+        # Get episode.
+        log_reader = create_ruka_log_reader(local_path)
+        return _get_episode(log_reader)
+
+
+def _cached_load_episode(remote_path: str) -> Episode:
+        local_path = dfs_util.cached_download_and_unpack(remote_path, other_dfs=dfs)
+        
         # Get episode.
         log_reader = create_ruka_log_reader(local_path)
         return _get_episode(log_reader)

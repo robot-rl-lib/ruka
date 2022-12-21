@@ -82,6 +82,20 @@ KEYMAP_KEYBOARD_6DOF_GOLDENAXE = {
     'exit': DiscreteTrigger(ecodes.KEY_ESC),
 }
 
+KEYMAP_KEYBOARD_6DOF_DMVCH = {
+    'x': DiscreteAxis(ecodes.KEY_A, ecodes.KEY_D),
+    'y': DiscreteAxis(ecodes.KEY_W, ecodes.KEY_S),
+    'z': DiscreteAxis(ecodes.KEY_K, ecodes.KEY_I),
+    'roll': DiscreteAxis(ecodes.KEY_J, ecodes.KEY_L),
+    'pitch': DiscreteAxis(ecodes.KEY_F, ecodes.KEY_R),
+    'yaw': DiscreteAxis(ecodes.KEY_U, ecodes.KEY_O),
+    'gripper': DiscreteTrigger(ecodes.KEY_SPACE),
+    'speed': DiscreteTrigger(ecodes.KEY_LEFTSHIFT),
+    'home': DiscreteTrigger(ecodes.KEY_HOME),
+    'exit': DiscreteTrigger(ecodes.KEY_ESC),
+    'switch_policy': DiscreteTrigger(ecodes.KEY_SEMICOLON),
+}
+
 # ---------------------------------------------------------------------- HID --
 
 @dataclass

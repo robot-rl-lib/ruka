@@ -171,7 +171,7 @@ def cached_download(remote_path: str, other_dfs: ModuleType = None):
         if not os.path.exists(local_path):
             local_path_folder = os.path.dirname(local_path)
             if not os.path.exists(local_path_folder):
-                os.makedirs(os.path.dirname(local_path))
+                os.makedirs(os.path.dirname(local_path), exist_ok=True)
             do_download = True
         elif _dfs.stat(remote_path).modification_time > _get_download_time(local_path):
             do_download = True
@@ -183,18 +183,19 @@ def cached_download(remote_path: str, other_dfs: ModuleType = None):
         return local_path
 
 
-def cached_download_and_unpack(remote_path: str) -> str:
+def cached_download_and_unpack(remote_path: str, other_dfs: ModuleType = None) -> str:
     '''
     Download .tar.gz archive and unpack it.
     If local path exists and is modified after remote_path, does nothing.
 
     Args:
         remote_path (str): dfs path to the archive file
+        other_dfs: use other, not default dfs module
 
     Returns:
         local_path (str): local path, where the archive was unpacked to
     '''
-
+    _dfs = other_dfs or dfs
     with _lock_cache_file(remote_path):
         local_path = _get_cache_path(remote_path)
         do_download = False
@@ -202,12 +203,12 @@ def cached_download_and_unpack(remote_path: str) -> str:
         if not os.path.exists(local_path):
             os.makedirs(local_path)
             do_download = True
-        elif dfs.stat(remote_path).modification_time > _get_download_time(local_path):
+        elif _dfs.stat(remote_path).modification_time > _get_download_time(local_path):
             do_download = True
 
         if do_download:
             print(f'Downloading {remote_path}...')
-            dfs.download_and_unpack(remote_path, local_path)
+            _dfs.download_and_unpack(remote_path, local_path)
 
         return local_path
 
