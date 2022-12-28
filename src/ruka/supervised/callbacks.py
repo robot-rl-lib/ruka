@@ -12,6 +12,7 @@ import ruka.util.distributed_fs as dfs
 from ruka.environments.common.env import Episode, TorchAware, Policy
 from ruka.types import Dictator
 from ruka.vis.batch_viz import viz_batch_img, get_batch_statistics
+from ruka.models.losses.base import Loss
 
 """ Classes that return stateful functions that log something on call
 """
@@ -133,11 +134,11 @@ class ValLossCallback(Callback):
     """
     def __init__(
         self, 
-        loss: nn.Module, 
+        loss: Loss, 
         test_data: Iterator, 
         calculate_every: int,
         n_batches: Optional[int] = None,
-        prefix: str = ''
+        prefix: str = '',
         ):
         self._test_data = test_data 
         self._n_batches = n_batches

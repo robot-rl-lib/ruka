@@ -1,4 +1,10 @@
+import abc
+import fcntl
+import os
 import time
+import threading
+
+import multiprocessing as mp
 
 from dataclasses import dataclass
 from typing import Optional
@@ -156,3 +162,81 @@ class Watchdog:
 
 class DeadlineError(Exception):
     pass
+
+
+class WatchHound(abc.ABC):
+    """
+    This class executes an action periodically and tracks this with the
+    Watchdog object defined above.
+
+    Periodicity is defined by dt in WatchDog params
+
+    As the wait interval is identified by Watchdog - a grace period is obligatory
+    as it will definitely fail if grace period is zero.
+    """
+    def __init__(self, params: WatchdogParams):
+        self._watchdog = Watchdog(params)
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self.time_loop)
+        self._thread.start()
+
+    def __del__(self):
+        self._stop_event.set()
+        self._thread.join()
+
+    def time_loop(self) :
+        wait_time = self._watchdog.get_time_to_sleep()
+        while not self._stop_event.wait(wait_time):
+            self.action()
+            self._watchdog.step()
+            wait_time = self._watchdog.get_time_to_sleep()
+            #print('YTIME NOW: ', "{:10.4f}".format(time.time()), '  TILL DEADLINE', "{:10.4f}".format(wait_time))
+
+    @abc.abstractmethod
+    def action(self):
+        pass
+
+
+def set_fd_flag(fd, flag):
+    flags = fcntl.fcntl(fd, fcntl.F_GETFL, 0)
+    fcntl.fcntl(fd, fcntl.F_SETFL, flags | flag)
+
+
+class WatchHoundPiped(WatchHound):
+    """
+    Send bool to Pipe periodically.
+
+    This pipe could be monitored by wait() along with other pipes
+    """
+    def __init__(self, params: WatchdogParams):
+        self.r, self.w = mp.Pipe()
+        super().__init__(params)
+
+    def action(self):
+        self.w.send(True)
+
+    @property
+    def conn(self):
+        return self.r
+
+
+class WatchHoundOSPiped(WatchHound):
+    """
+    Send bool to Pipe periodically.
+
+    This pipe could be monitored by select() along with other fds
+    This doesn't give a wait on send() which may happen with MP.Pipe()
+    """
+    def __init__(self, params: WatchdogParams):
+        self.r, self.w = os.pipe()
+        set_fd_flag(self.r, os.O_NONBLOCK)
+        set_fd_flag(self.w, os.O_NONBLOCK)
+        super().__init__(params)
+
+    def action(self):
+        os.write(self.w, str.encode('a'))
+        
+    @property
+    def conn(self):
+        return self.r
+

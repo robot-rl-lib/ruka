@@ -13,6 +13,8 @@ from manipulation_main.common import transformations
 from ruka.util.x3d import Vec3
 from ruka.environments.common.controller import Controller
 from ruka.robot.actions import RobotAction
+from ruka.robot.realtime import Watchdog, WatchdogParams, DeadlineError
+from ruka_os.globals import WATCHDOG_AGGRESSIVE_REALTIME, USE_ENV_WATCHDOG
 
 
 class VelocityControlRobotEnv(RobotEnv):
@@ -37,9 +39,19 @@ class VelocityControlRobotEnv(RobotEnv):
         self.gripper_close_position = gripper_close_position
 
         self.dt = dt
+        if USE_ENV_WATCHDOG:
+            self._watchdog = Watchdog(WatchdogParams(
+                dt=self.dt,
+                grace_period=0.005 if WATCHDOG_AGGRESSIVE_REALTIME else 0.05,
+                max_fail_time=0.02 if WATCHDOG_AGGRESSIVE_REALTIME else 0.1,
+                max_fail_rate=0.3 if WATCHDOG_AGGRESSIVE_REALTIME else 0,
+                window_in_steps=10 if WATCHDOG_AGGRESSIVE_REALTIME else 0
+            ))
+            self._camera_started = None
+        else:
+            self._observation_ts = None
 
         self._gripper_open = None
-        self._observation_ts = None
         self._observation_types=observation_types
 
     def reset(self):
@@ -58,6 +70,8 @@ class VelocityControlRobotEnv(RobotEnv):
                 'move': {'xyz': (0,0,0), 'rpy': (0,0,0)}
                 })
         self._gripper_open = True
+        if USE_ENV_WATCHDOG:
+            self._watchdog.reset()
 
         return self.get_observation()
 
@@ -71,6 +85,15 @@ class VelocityControlRobotEnv(RobotEnv):
             self._gripper_open = True
         elif action['gripper'] == self.gripper_close_position:
             self._gripper_open = False
+
+        # keep requested control loop rate
+        if USE_ENV_WATCHDOG:
+            stime = self._watchdog.get_time_to_sleep()            
+            #t= time.time()
+            #print('ROUNDTRP TIME', "{:10.4f}".format(t-self.RTIME),'TIME NOW: ', "{:10.4f}".format(time.time()), '  TILL DEADLINE', "{:10.4f}".format(stime))
+            time.sleep(stime)
+            self._watchdog.step()
+        
         return self.get_observation()
 
     @property
@@ -117,15 +140,21 @@ class VelocityControlRobotEnv(RobotEnv):
         self.camera.stop()
 
     def get_observation(self):
-        if self._observation_ts:
-            time.sleep(max(0, self._observation_ts + self.dt - time.time()))
+        if USE_ENV_WATCHDOG:
+            if not self._camera_started:
+                self.camera.start()
+                self._camera_started = True
         else:
-            self.camera.start()
+            if self._observation_ts:
+                time.sleep(max(0, self._observation_ts + self.dt - time.time()))
+            else:
+                self.camera.start()
 
         # RGBD
         frame = self.camera.capture()
-        self._observation_ts = time.time()
-
+        if not USE_ENV_WATCHDOG:
+            self._observation_ts = time.time()
+        
         rgb = frame[:,:, :3]
         depth = frame[:,:,3][:,:,None]
 
@@ -133,7 +162,7 @@ class VelocityControlRobotEnv(RobotEnv):
         x, y, z = self.arm_info.pos
         roll, pitch, yaw = self.arm_info.angles
         gripper = self.gripper_info.gripper_pos
-
+        
         obs = Observation()
 
         if Observe.RGB in self._observation_types:

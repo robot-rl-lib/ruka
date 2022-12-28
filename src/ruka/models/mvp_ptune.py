@@ -18,18 +18,25 @@ _MODELS = {
     "vitl-256-mae-egosoup": "https://berkeley.box.com/shared/static/6p0pc47mlpp4hhwlin2hf035lxlgddxr.pth",
 }
 
-class VisionTransformer(timm.models.vision_transformer.VisionTransformer):
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+class VisionTransformerPtune(timm.models.vision_transformer.VisionTransformer):
     """ Vision Transformer
         referene:
             - MAE:  https://github.com/facebookresearch/mae/blob/main/models_vit.py
             - timm: https://github.com/rwightman/pytorch-image-models/blob/master/timm/models/vision_transformer.py
     """
-    def __init__(self, **kwargs):
-        super(VisionTransformer, self).__init__(**kwargs)
+    def __init__(self, n_ptune: int, **kwargs):
+        super(VisionTransformerPtune, self).__init__(**kwargs)
         # remove the classifier
         if hasattr(self, "pre_logits"):
             del self.pre_logits
         del self.head
+        
+        self.ptune_tokens = nn.Parameter(torch.randn(1, n_ptune, self.embed_dim), requires_grad=True)
+        self.num_prefix_tokens += n_ptune
+
         self.register_buffer('_img_mean',
                                 torch.tensor([0.485, 0.456, 0.406],
                                         dtype=torch.float32).view(1, -1, 1, 1))
@@ -45,10 +52,12 @@ class VisionTransformer(timm.models.vision_transformer.VisionTransformer):
         x = torch.cat((cls_tokens, x), dim=1)
         x = x + self.pos_embed
 
+        x = torch.cat((x, self.ptune_tokens.expand(B, -1, -1) ), dim=1)
+
         for blk in self.blocks:
             x = blk(x)
 
-        x = x[:, 0]# .detach().float()
+        x = x[:, 0] # .detach().float()
         return x
 
     def forward_norm(self, x):
@@ -75,6 +84,7 @@ class VisionTransformer(timm.models.vision_transformer.VisionTransformer):
                 trainable_params.append(name)
         print("Trainable:")
         print(trainable_params)
+        print(f"Number of trainable: {count_parameters(self)}")
                 
     def unfreeze_cls(self):
         self.cls_token.requires_grad = True
@@ -84,35 +94,8 @@ class VisionTransformer(timm.models.vision_transformer.VisionTransformer):
             if 'norm' in name:
                 p.requires_grad = True
 
-
-def vit_s16(pretrained, **kwargs):
-    model = VisionTransformer(
-        patch_size=16, embed_dim=384, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True,
-        norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
-    assert os.path.exists(pretrained) or pretrained.startswith("none")
-    # load from checkpoint
-    if not pretrained.startswith("none"):
-        load_checkpoint(pretrained, model)
-        print("Loaded encoder from: {}".format(pretrained))
-    hidden_dim = 384
-    return model, hidden_dim
-
-
-def vit_b16(pretrained, **kwargs):
-    model = VisionTransformer(
-        patch_size=16, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True,
-        norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
-    assert os.path.exists(pretrained) or pretrained.startswith("none")
-    # load from checkpoint
-    if not pretrained.startswith("none"):
-        load_checkpoint(pretrained, model)
-        print("Loaded encoder from: {}".format(pretrained))
-    hidden_dim = 768
-    return model, hidden_dim
-
-
 def vit_l16(pretrained, **kwargs):
-    model = VisionTransformer(
+    model = VisionTransformerPtune(
         patch_size=16, embed_dim=1024, depth=24, num_heads=16, mlp_ratio=4, qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
     assert os.path.exists(pretrained) or pretrained.startswith("none")
@@ -124,8 +107,6 @@ def vit_l16(pretrained, **kwargs):
     return model, hidden_dim
 
 _MODEL_FUNCS = {
-    "vits": vit_s16,
-    "vitb": vit_b16,
     "vitl": vit_l16,
 }
 
@@ -149,12 +130,14 @@ def available_models():
     """Retrieves the names of available models."""
     return list(_MODELS.keys())
 
-def load(name):
+
+
+def load(name, n_ptune = 10):
     """Loads a pre-trained model."""
     assert name in _MODELS.keys(), "Model {} not available".format(name)
     pretrained = dfs.cached_download(f'aux_data/{name}.pth', dfs_v2)
     model_func = _MODEL_FUNCS[name.split("-")[0]]
     img_size = 256 if "-256-" in name else 224
-    model, _ = model_func(pretrained=pretrained, img_size=img_size)
-    return model
+    model, _ = model_func(pretrained=pretrained, img_size=img_size, n_ptune=n_ptune)
+    return (model)
 

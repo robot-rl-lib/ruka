@@ -1,5 +1,5 @@
 from dataclasses import is_dataclass, fields, FrozenInstanceError
-from typing import Any, Callable, Dict, Iterator, Tuple, Union
+from typing import Any, Callable, Dict, Iterator, Tuple, Union, Optional
 
 
 NestedDict = Union[Any, Dict[str, 'NestedDict']]
@@ -57,7 +57,7 @@ def map_inplace(
 
 def items(
         x: NestedDict,
-        prefix: str,
+        prefix: Optional[str] = None,
         sep: str = '/',
         enter_dataclasses: bool = False
     ) -> Iterator[Tuple[str, Any]]:
@@ -83,15 +83,36 @@ def items(
     # Dict.
     if isinstance(x, dict):
         for k, v in x.items():
-            yield from items(v, f'{prefix}{sep}{k}', sep, enter_dataclasses)
+            if prefix:
+                yield from items(v, f'{prefix}{sep}{k}', sep, enter_dataclasses)
+            else:
+                yield from items(v, f'{k}', sep, enter_dataclasses)
         return
 
     # Dataclass.
     if enter_dataclasses and (is_dataclass(x) and not isinstance(x, type)):
         for k in fields(x):
             v = getattr(x, k.name)
-            yield from items(v, f'{prefix}{sep}{k.name}', sep, enter_dataclasses)
+            if prefix:
+                yield from items(v, f'{prefix}{sep}{k.name}', sep, enter_dataclasses)
+            else:
+                yield from items(v, f'{k.name}', sep, enter_dataclasses)
         return
 
     # Item.
     yield (prefix, x)
+
+def flatten(x: NestedDict, sep: str = '/'):
+    return {k: v for k, v in items(x, sep=sep)}
+
+def unflatten(x: NestedDict, sep: str = '/'):
+    out = dict()
+    for key, value in x.items():
+        parts = key.split(sep)
+        d = out
+        for part in parts[:-1]:
+            if part not in d:
+                d[part] = dict()
+            d = d[part]
+        d[parts[-1]] = value
+    return out

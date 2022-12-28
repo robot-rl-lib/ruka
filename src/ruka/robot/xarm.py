@@ -1,9 +1,11 @@
 import inspect
 import logging
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple
 import numpy as np
 import multiprocessing as mp
+import os
 import random
+import select
 import time
 import traceback
 import math
@@ -15,8 +17,11 @@ from dataclasses import dataclass
 from xarm.wrapper import XArmAPI
 from xarm.x3.code import APIState
 
+from ruka.robot.force import ForceInfo
+from ruka.robot.realtime import WatchHoundPiped, WatchdogParams, WatchHoundOSPiped
 from ruka.util.reporter import store_live_robot_params
 from ruka.util.x3d import Vec3, conventional_rotation
+from ruka_os.globals import WATCHDOG_AGGRESSIVE_REALTIME, USE_VEL_WATCHDOG
 
 
 from .robot import \
@@ -73,7 +78,7 @@ class XArmConfig:
     report_info: bool = True
 
 
-class _XArm(ArmInfo, GripperInfo, GripperPosControlled):
+class _XArm(ArmInfo, ForceInfo, GripperInfo, GripperPosControlled):
     def __init__(self, config: XArmConfig):
         self._config = config
         self._joints_hard_limits = {
@@ -113,6 +118,8 @@ class _XArm(ArmInfo, GripperInfo, GripperPosControlled):
         self._api.set_gripper_speed(config.gripper_max_speed * 10)           # Set current gripper speed
         self._api.set_tcp_maxacc(config.max_acc)
         self._api.set_tcp_jerk(config.max_jerk)
+        self._api.ft_sensor_enable(True)
+        self._api.set_tcp_offset([0, 0, 52.5, 0, 0, 0])
         self._accept_move_commands = False
 
         if self._config.report_info:
@@ -182,6 +189,7 @@ class _XArm(ArmInfo, GripperInfo, GripperPosControlled):
                 retries += 1
 
         self._api.set_reduced_mode(True)  # Enable reduced mode back
+        self._api.ft_sensor_set_zero()
         self.hold()
 
     def check(self):
@@ -226,6 +234,12 @@ class _XArm(ArmInfo, GripperInfo, GripperPosControlled):
         if not self._accept_move_commands:
             return
         self._api.set_gripper_position(pos * 10, auto_enable=True, wait=False)
+
+    # - ForceInfo  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+    @property
+    def external_force(self) -> List[float]:
+        return self._api.ft_ext_force
 
     # - Misc - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
@@ -381,6 +395,7 @@ class XArmVelOverPosControlled(ArmInfo, GripperInfo, GripperPosControlled, ArmPo
         )
         self._control_loop_process.start()
 
+
     @raise_for_not_finite
     def set_pos(self, pos: Vec3, angles: Vec3):
         self._rpc('set_pos', pos, angles)
@@ -466,7 +481,19 @@ class XArmVelOverPosControlled(ArmInfo, GripperInfo, GripperPosControlled, ArmPo
             def accept_move_commands(self):
                 return self._accept_move_commands
 
-
+        if USE_VEL_WATCHDOG:
+            watchhound = WatchHoundOSPiped(WatchdogParams(
+                dt=dt,
+                grace_period=0.001 if WATCHDOG_AGGRESSIVE_REALTIME else 0.01,
+                max_fail_time=0.01 if WATCHDOG_AGGRESSIVE_REALTIME else 0.05,
+                max_fail_rate=0.5 if WATCHDOG_AGGRESSIVE_REALTIME else 0,
+                window_in_steps=10 if WATCHDOG_AGGRESSIVE_REALTIME else 0
+            ))
+            timer_conn = watchhound.conn       
+            #connections = [timer_conn, conn]
+            fn = conn.fileno()
+            fds = [timer_conn, conn.fileno()]
+        
         pos_control = _XArmPosControlledWithSpeed(config)
         vel = np.zeros((3,))
         angular_vel = np.zeros((3,))
@@ -474,7 +501,29 @@ class XArmVelOverPosControlled(ArmInfo, GripperInfo, GripperPosControlled, ArmPo
         error = None
         try:
             while True:
-                if conn.poll():
+
+                remote_event = False
+                timed_event = False
+                if USE_VEL_WATCHDOG:
+                    # Doesn't work as the Pipe.send() sometimes freeze for 3 secs
+                    #for r in mp.connection.wait(connections):
+                    #    if r is conn:
+                    #        remote_event = True
+                    #   if r is timer_conn:
+                    #        x = timer_conn.recv()
+                    #        timed_event = True
+                    reads, _, _ = select.select(fds, [], [])
+                    for cn in reads:
+                        if cn==fn:
+                            remote_event = True
+                        if cn==timer_conn:
+                            x = os.read(timer_conn,1)
+                            timed_event = True
+                else:
+                    remote_event = conn.poll()
+                    timed_event = True
+
+                if remote_event:
                     try:
                         action, args = conn.recv()
                         if action == 'park':
@@ -536,19 +585,24 @@ class XArmVelOverPosControlled(ArmInfo, GripperInfo, GripperPosControlled, ArmPo
                     except Exception as e:
                         traceback.print_exc()
                         conn.send(e)
-                if not error and control_mode == ControlMode.VEL and pos_control.accept_move_commands:
-                    speed = np.linalg.norm(vel)
-                    angular_speed = np.linalg.norm(angular_vel)
-                    speed = max(speed, angular_speed)
-                    if speed > config.max_speed:
-                        speed = config.max_speed
-                    pos = np.array(pos_control.pos)
-                    angles = np.array(pos_control.angles)
-                    try:
-                        pos_control.set_pos(list(pos + vel), list(angles + angular_vel), speed)
-                    except RobotError as e:
-                        error = e
-                time.sleep(dt)
+
+                # this is watch dog event!
+                if timed_event:
+                    if not error and control_mode == ControlMode.VEL and pos_control.accept_move_commands:
+                        speed = np.linalg.norm(vel)
+                        angular_speed = np.linalg.norm(angular_vel)
+                        speed = max(speed, angular_speed)
+                        if speed > config.max_speed:
+                            speed = config.max_speed
+                        pos = np.array(pos_control.pos)
+                        angles = np.array(pos_control.angles)
+                        try:
+                            pos_control.set_pos(list(pos + vel), list(angles + angular_vel), speed)
+                        except RobotError as e:
+                            error = e
+
+                if not USE_VEL_WATCHDOG:
+                     time.sleep(dt)
         except:
             traceback.print_exc()
         finally:
