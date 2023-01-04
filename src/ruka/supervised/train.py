@@ -66,6 +66,8 @@ def train(config: TrainConfig) -> None:
         loss_module.train()
         batch = next(train_data)
         loss = loss_module(batch)
+        if isinstance(loss, dict):
+            loss = loss['loss']
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()

@@ -17,6 +17,8 @@ class Mlp(nn.Module):
             b_init_value=0.,
             layer_norm=False,
             layer_norm_kwargs=None,
+            input_dropout = 0,
+            last_dropout = 0,
     ):
         super().__init__()
 
@@ -32,6 +34,8 @@ class Mlp(nn.Module):
         self.layer_norms = []
         in_size = input_size
 
+        self.input_dropout = nn.Dropout(input_dropout)
+
         for i, next_size in enumerate(hidden_sizes):
             fc = nn.Linear(in_size, next_size)
             in_size = next_size
@@ -46,17 +50,21 @@ class Mlp(nn.Module):
                 self.__setattr__("layer_norm{}".format(i), ln)
                 self.layer_norms.append(ln)
 
+        self.last_dropout = nn.Dropout(last_dropout)
+
         self.last_fc = nn.Linear(in_size, output_size)
         self.last_fc.weight.data.uniform_(-init_w, init_w)
         self.last_fc.bias.data.fill_(0)
 
     def forward(self, input, return_preactivations=False):
         h = input
+        h = self.input_dropout(h)
         for i, fc in enumerate(self.fcs):
             h = fc(h)
             if self.layer_norm and i < len(self.fcs) - 1:
                 h = self.layer_norms[i](h)
             h = self.hidden_activation(h)
+        h = self.last_dropout(h)
         preactivation = self.last_fc(h)
         output = self.output_activation(preactivation)
         if return_preactivations:

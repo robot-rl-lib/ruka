@@ -15,7 +15,7 @@ from pathlib import Path
 from ruka.util.compression import img2jpg
 from ruka_os.globals import streaming_file_from_id, get_infra_setup, \
                             streaming_sock_from_id, streaming_info_from_file, \
-                            LIVE_STREAMING_TIME_DELTA
+                            LIVE_STREAMING_TIME_DELTA, DEFAULT_STREAM_JPG_QUALITY
 from typing import Dict, Tuple, Any
 from v4l2 import *
 
@@ -242,7 +242,8 @@ class MasterCamera(Camera):
         self.pic_updated_took = threading.Event()
 
         # shared data object so we should lock when reading
-        self.last_pic = []
+        self.last_pic = [[],[]]
+        self.cur_pic_index = 0 # index of the actual pic is located
         self.wants = False
  
         # create and launch thread
@@ -257,12 +258,20 @@ class MasterCamera(Camera):
         and written to our streaming file
         """
         while not self.closing:
-            self.last_pic = self.slave.capture()
-            if self.wants:
-                self.pic_updated_took.clear()
-                self.pic_updated_event.set()
-                if not self.pic_updated_event.wait():
-                    raise NotImplementedError('what to do in this case?!')
+            # camera is freezing in this function
+            # to get another frame according to its FPS
+            pic = self.slave.capture()
+
+            # after we should update the pic storage with changes from step to
+            # step from zero to 1, thus we always have the fresh frame we we 
+            # need it without waiting
+            # this lock potentially may freeze this worker, but only on the time
+            # of deepcopy(), which expected to be faster than the capture() call
+            # above - so this is OKAY!
+            self.pic_lock.acquire()
+            self.cur_pic_index = 1 - self.cur_pic_index
+            self.last_pic[self.cur_pic_index] = pic
+            self.pic_lock.release()
 
     # stop on emregncy when deleting MasterCamera - ouch - never!
     def __del__(self):
@@ -300,14 +309,19 @@ class MasterCamera(Camera):
         pass
 
     def capture(self):
-        self.pic_updated_event.clear()
-        self.wants = True
-        if not self.pic_updated_event.wait():
-            raise NotImplementedError('what to do in this case?!')
-        self.wants = False
-        picdata = copy.deepcopy(self.last_pic)
-        self.pic_updated_took.set()
-
+        while True:
+            # get last good frame without waiting capture() to be finished
+            self.pic_lock.acquire()
+            picdata = copy.deepcopy(self.last_pic[self.cur_pic_index])
+            self.pic_lock.release()
+            if len(picdata)>0:
+                break
+            # for the first frame we may got an empty array []
+            # so lets sleep a bit and whait while worker fills the data
+            # this shoould be a sub fps wait:
+            # TODO: rebuild this later when we get the FPS info
+            time.sleep(0.001)
+        
         return picdata
 
     @property
@@ -448,6 +462,7 @@ def get_image_streamer(config: Dict, cls: Any = False):
     stype, id = stream_key_from_config(config)
     data_transfer = False
     resize = False
+    quality = DEFAULT_STREAM_JPG_QUALITY
     if config.get('clone_from'):
         if config.get('clone_from').get('data_transfer'):
             data_transfer = config.get('clone_from').get('data_transfer')
@@ -456,15 +471,17 @@ def get_image_streamer(config: Dict, cls: Any = False):
             data_transfer['get_data'] = data_transfer.get('data_generator')(cls)
         if config.get('clone_from').get('resize'):
             resize = config.get('clone_from').get('resize')
+        if config.get('clone_from').get('quality'):
+            quality = config.get('clone_from').get('quality')
     
     sid = f'{stype}-{id}'
     if streamers.get(sid):
         return streamers.get(sid)
 
     if stype == StreamTo.FILE:
-        streamers[sid] = StreamImagesToFile(id, data_transfer=data_transfer, resize=resize)
+        streamers[sid] = StreamImagesToFile(id, data_transfer=data_transfer, resize=resize, quality=quality)
     elif stype == StreamTo.SOCK:
-        streamers[sid] = StreamImagesToSocket(id, data_transfer=data_transfer, resize=resize)
+        streamers[sid] = StreamImagesToSocket(id, data_transfer=data_transfer, resize=resize, quality=quality)
     else:
         raise NotImplementedError()
 
@@ -476,7 +493,7 @@ class StreamImagesTo():
     Send image to file and not wasting too much time from main thread
     when encoding and writing JPG
     """
-    def __init__(self, data_transfer = False, resize = False):
+    def __init__(self, data_transfer = False, resize = False, quality = 95):
         """
         Initilize our thread for writing frames to a streaming engine
         """
@@ -509,7 +526,7 @@ class StreamImagesTo():
             if not resize.get('height'):
                 raise ValueError('Resize for stream is wrong: height not set')
             self.resize = resize
-
+        self.quality = quality
     
     def __del__(self):
         """
@@ -640,7 +657,8 @@ class StreamImagesToFile(StreamImagesTo):
     Send image to file and not wasting too much time from main thread
     when encoding and writing JPG
     """
-    def __init__(self, fileid: int, data_transfer = False, resize = False, use_cv2 : bool = False):
+    def __init__(self, fileid: int, data_transfer = False, resize = False,
+                 quality = 95, use_cv2 : bool = False):
         """
         Initilize our thread for writing frames to a streaming file
 
@@ -648,7 +666,7 @@ class StreamImagesToFile(StreamImagesTo):
         defined in streaming_file_from_id(fileid)
         """
         self.file = streaming_file_from_id(fileid)
-        super().__init__(data_transfer=data_transfer, resize=resize)        
+        super().__init__(data_transfer=data_transfer, resize=resize, quality=quality)        
         self.use_cv2 = use_cv2
 
     def stream_image(self, pic_data):
@@ -656,7 +674,7 @@ class StreamImagesToFile(StreamImagesTo):
             cv2.imwrite(self.file, pic_data)
         else:
             with open(self.file, 'wb') as f:
-                f.write(img2jpg(pic_data))
+                f.write(img2jpg(pic_data, quality=self.quality))
 
     def get_streaming_file(self):
         return self.file
@@ -667,7 +685,7 @@ class StreamImagesToSocket(StreamImagesTo):
     Send image to file and not wasting too much time from main thread
     when encoding and writing JPG
     """
-    def __init__(self, sockid: int, data_transfer = False, resize = False):
+    def __init__(self, sockid: int, data_transfer = False, resize = False, quality=95):
         """
         Initilize our thread for writing frames to a streaming socket
 
@@ -675,7 +693,7 @@ class StreamImagesToSocket(StreamImagesTo):
         defined in streaming_sock_from_id(sockid)
         """
         self.sock_file = streaming_sock_from_id(sockid)
-        super().__init__(data_transfer=data_transfer, resize=resize)
+        super().__init__(data_transfer=data_transfer, resize=resize, quality=quality)
         self.sock = False
 
     def __del__():
@@ -705,7 +723,7 @@ class StreamImagesToSocket(StreamImagesTo):
     def stream_image(self, pic_data):
         if not self.check_sock():
             return
-        jpg = img2jpg(pic_data)
+        jpg = img2jpg(pic_data, quality=self.quality)
         size = len(jpg)
         crc = 0
         header = bytearray(struct.pack('<ccLL', b'R', b'K', socket.htonl(size), socket.htonl(crc)))

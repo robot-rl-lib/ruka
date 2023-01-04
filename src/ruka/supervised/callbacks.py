@@ -154,16 +154,23 @@ class ValLossCallback(Callback):
         ):
         if ((step + 1) % self._calculate_every) != 0:
             return
-        loss = 0
+        losses = collections.defaultdict(float)
+
         with torch.no_grad():
             for batch_num, batch in enumerate(self._test_data):
-                loss += self._loss(batch).cpu().detach().item()
+                loss = self._loss(batch)
+                if not isinstance(loss, dict):
+                    loss = {'loss': loss}
+                for l,v in loss.items():
+                    losses[l] += v.cpu().detach().item()
+
                 if self._n_batches and self._n_batches == batch_num + 1:
                     break                
 
         tb.step(step)
-        tb.scalar(self.prefix + 'Validation loss', loss / (batch_num + 1))
-        print(f'Step {step} validation loss = {loss / (batch_num + 1)}')
+        for l,v in losses.items():
+            tb.scalar(self.prefix + f'Validation {l}', v / (batch_num + 1))
+            print(f'Step {step} validation {l} = {v / (batch_num + 1)}')
         
 
 class SaveCallback(Callback):

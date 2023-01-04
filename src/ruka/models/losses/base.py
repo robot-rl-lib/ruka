@@ -9,4 +9,4 @@ class Loss(nn.Module):
         raise NotImplementedError()
 
     def log_stats(self, step: int, prefix: Optional[str] = None):
-        raise NotImplementedError()
+        pass
