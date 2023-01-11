@@ -33,8 +33,8 @@ class Actuator:
         self._action_scaler.fit(np.vstack((-1. * high, high)))
         self.action_space = gym.spaces.Box(-1.,
                                         1., shape=(5,), dtype=np.float32)
-        
-        self.state_space = gym.spaces.Box(0., 1., shape=(1,), dtype=np.float32) 
+
+        self.state_space = gym.spaces.Box(0., 1., shape=(1,), dtype=np.float32)
 
         self._action_wait = config['robot']['action_wait']
         self._gripper_wait = config['robot']['gripper_wait']
@@ -42,7 +42,7 @@ class Actuator:
     def reset(self):
         self.endEffectorAngle = 0.
         start_pos = [0., 0., self._robot._initial_height]
-        model_path = get_data(self._config.robot.model_path)
+        model_path = get_data(self._config.robot.model_path, True)
         self._model = self._robot.add_model(model_path, start_pos, self._robot._init_ori)
         self._joints = self._model.joints
         self._left_finger = self._model.joints[7]
@@ -103,7 +103,7 @@ class Actuator:
 
         for i, joint in enumerate([0, 1, 2, 3]):
             self._joints[joint].set_position(comp_pos[i])
-        
+
         self._robot.run(self._action_wait)
 
     def _get_gripper_width(self):

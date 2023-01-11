@@ -11,7 +11,7 @@ from enum import Enum
 from manipulation_main.common import transformations
 from manipulation_main.common import transform_utils
 from . import actuator, sensor
-from .simulation.simulation import World 
+from .simulation.simulation import World
 from .rewards import Reward, SimplifiedReward, ShapedCustomReward
 from .curriculum import WorkspaceCurriculum
 from ruka.data import get_data
@@ -46,14 +46,14 @@ class RobotEnv(World):
 
     def __init__(self, config, evaluate=False, test=False, validate=False):
         super().__init__(
-            config, evaluate=evaluate, test=test, 
+            config, evaluate=evaluate, test=test,
             validate=validate, only_ball=config.only_ball)
         self._step_time = collections.deque(maxlen=10000)
         self.time_horizon = config['time_horizon']
         self._workspace = {'lower': np.array([-1., -1., -1]),
                            'upper': np.array([1., 1., 1.])}
 
-        self.model_path = get_data(config['robot']['model_path'])
+        self.model_path = get_data(config['robot']['model_path'], True)
 
         self._simplified = config['simplified']
         self.depth_obs = config.depth_observation
@@ -77,7 +77,7 @@ class RobotEnv(World):
             self._reward_fn = SimplifiedReward(config['reward'], self)
         elif config['reward']['custom']:
             self._reward_fn = ShapedCustomReward(config['reward'], self)
-        else:    
+        else:
             self._reward_fn = Reward(config['reward'], self)
 
         # Assign the sensors
@@ -247,7 +247,7 @@ class RobotEnv(World):
 
         for i, joint in enumerate(self.main_joints):
             self._joints[joint].set_position(comp_pos[i])
-        
+
         self.run(0.1)
 
     def relative_pose(self, translation, yaw_rotation):
@@ -286,7 +286,7 @@ class RobotEnv(World):
                                self._workspace['lower'],
                                self._workspace['upper'])
         return position
-    
+
     def get_gripper_width(self):
         """Query the current opening width of the gripper."""
         left_finger_pos = 0.05 - self._left_finger.get_position()

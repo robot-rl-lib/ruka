@@ -158,7 +158,7 @@ def cached_download(remote_path: str, other_dfs: ModuleType = None):
 
     Args:
         remote_path (str): dfs path to the file
-        other_dfs: use other, not default dfs module 
+        other_dfs: use other, not default dfs module
 
     Returns:
         local_path (str): local path, where the file was downloaded to

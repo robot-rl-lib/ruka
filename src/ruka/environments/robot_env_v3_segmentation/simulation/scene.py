@@ -21,13 +21,13 @@ class OnTable:
 
     def reset(self):
         tray_path = os.path.join(pybullet_data.getDataPath(), 'tray/tray.urdf')
-        plane_urdf = get_data('models/plane.urdf')
-        table_urdf = get_data('models/table/table.urdf')
+        plane_urdf = get_data('models/plane.urdf', True)
+        table_urdf = get_data('models/table/table.urdf', True)
         self._world.add_model(plane_urdf, [0., 0., -1.], [0., 0., 0., 1.])
         self._world.add_model(table_urdf, [0., 0., -.82], [0., 0., 0., 1.])
         self._world.add_model(tray_path, [0, 0.075, -0.19],
                               [0.0, 0.0, 1.0, 0.0], scaling=1.2)
-            
+
         # Sample random objects
         n_objects = npr.randint(self.min_objects, self.max_objects + 1)
         urdf_paths, scale = self._sample_random_objects(n_objects)
@@ -45,13 +45,13 @@ class OnTable:
     def _sample_random_objects(self, n_objects):
         if self._validate:
             self.object_range = np.arange(700, 850)
-        else: 
+        else:
             self.object_range = 700
         selection = npr.choice(self.object_range, size=n_objects)
         paths = [os.path.join(pybullet_data.getDataPath(), 'random_urdfs',
                             '{0:03d}/{0:03d}.urdf'.format(i)) for i in selection]
         return paths, 1.
-    
+
     @property
     def pickable_objects(self):
         return self._pickable_objects

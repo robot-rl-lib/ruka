@@ -14,7 +14,7 @@ def compose_matrix_world(pos: Optional[Vec3] = None, angles: Optional[Vec3] = No
     if angles is not None:
         r, p, y = np.deg2rad(angles)
         m = transformations.euler_matrix(r, -p, -y, 'sxyz')
-        
+
     if pos is not None:
         m[:3, 3] = np.array(pos)
 
@@ -63,3 +63,11 @@ def conventional_rotation(angles: Vec3, axis: int, angle: float) -> Vec3:
     _, angles = decompose_matrix_world(conventional_tool_matrix)
     return angles
 
+
+def tool_to_world(tool_xyz, tool_rpy, robot_rpy) -> Tuple[Vec3, Vec3]:
+    world_to_tool = compose_matrix_world(angles=robot_rpy)
+    tool = compose_matrix_tool(pos=tool_xyz, angles=tool_rpy)
+    tool_to_world = np.linalg.inv(world_to_tool)
+    world = chain(world_to_tool, tool, tool_to_world)
+
+    return decompose_matrix_world(world)

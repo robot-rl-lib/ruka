@@ -36,7 +36,7 @@ class BaseScene(ABC):
             self.object_range = np.arange(700, 850)
         elif self._test:
             self.object_range = np.arange(850, 1000)
-        else: 
+        else:
             self.object_range = 700
         # object_range = 900 if not self._test else np.arange(900, 1000)
         selection = self._rng.choice(self.object_range, size=n_objects)

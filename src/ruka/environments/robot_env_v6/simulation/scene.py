@@ -30,8 +30,8 @@ class OnTable:
 
     def reset(self):
         tray_path = get_pybullet_data('tray/tray.urdf')
-        plane_urdf = get_data('models/plane.urdf')
-        table_urdf = get_data('models/table/table.urdf')
+        plane_urdf = get_data('models/plane.urdf', True)
+        table_urdf = get_data('models/table/table.urdf', True)
         self._world.add_model(plane_urdf, [0., 0., -1.], [0., 0., 0., 1.])
         self._world.add_model(table_urdf, [0., 0., -.82], [0., 0., 0., 1.])
         self._world.add_model(tray_path, [0, 0.075, -0.19],

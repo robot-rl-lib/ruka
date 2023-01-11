@@ -20,7 +20,7 @@ class OnTable:
         self.pickable_objects = []
 
         self.dataset = config.object_dataset
-        
+
         self._sampling_functions = {
             ObjectDataset.RANDOM_URDFS: self._sample_random_urdfs,
             ObjectDataset.CUSTOM_GAZEBO: self._sample_custom_gazebo,
@@ -30,13 +30,13 @@ class OnTable:
 
     def reset(self):
         tray_path = get_pybullet_data('tray/tray.urdf')
-        plane_urdf = get_data('models/plane.urdf')
-        table_urdf = get_data('models/table/table.urdf')
+        plane_urdf = get_data('models/plane.urdf', True)
+        table_urdf = get_data('models/table/table.urdf', True)
         self._world.add_model(plane_urdf, [0., 0., -1.], [0., 0., 0., 1.])
         self._world.add_model(table_urdf, [0., 0., -.82], [0., 0., 0., 1.])
         self._world.add_model(tray_path, [0, 0.075, -0.19],
                               [0.0, 0.0, 1.0, 0.0], scaling=1.2)
-            
+
         # Sample random objects
         n_objects = npr.randint(self.min_objects, self.max_objects + 1)
         urdf_paths_and_scales = self._sample_objects_fn(n_objects)
@@ -56,7 +56,7 @@ class OnTable:
     def _sample_random_urdfs(self, n_objects):
         if self._validate:
             self.object_range = np.arange(700, 850)
-        else: 
+        else:
             self.object_range = 700
         selection = npr.choice(self.object_range, size=n_objects)
         paths_and_scales = [(os.path.join(pybullet_data.getDataPath(), 'random_urdfs',
@@ -64,7 +64,7 @@ class OnTable:
         return paths_and_scales
 
     def _sample_custom_gazebo(self, n_objects):
-        path = get_data('custom_dataset')
+        path = get_data('custom_dataset', True)
         # objects = glob.glob(os.path.join(path, "*", ))
         object_folders = glob.glob(os.path.join(path, "*"))
 

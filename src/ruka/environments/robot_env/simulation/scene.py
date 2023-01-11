@@ -21,9 +21,9 @@ class OnTable(BaseScene):
         self._model_path = pybullet_data.getDataPath()
         tray_path = os.path.join(self._model_path, 'tray/tray.urdf')
         # plane_urdf = os.path.join("models", self.plane_path)
-        plane_urdf = get_data(os.path.join("models", self.plane_path))
+        plane_urdf = get_data(os.path.join("models", self.plane_path), True)
         # table_urdf = os.path.join("models", self.table_path)
-        table_urdf = get_data(os.path.join("models", self.table_path))
+        table_urdf = get_data(os.path.join("models", self.table_path), True)
         self._world.add_model(plane_urdf, [0., 0., -1.], [0., 0., 0., 1.])
         self._world.add_model(table_urdf, [0., 0., -.82], [0., 0., 0., 1.])
         self._world.add_model(tray_path, [0, 0.075, -0.19],
@@ -35,7 +35,7 @@ class OnTable(BaseScene):
             block_model = self._world.add_model(os.path.join(self._model_path, 'sphere2red.urdf'), position, orientation, scaling=.07)
             self.block_models.append(block_model)
             return
-            
+
         # Sample random objects
         n_objects = self._rng.randint(self.min_objects, self.max_objects + 1)
         urdf_paths, scale = self._object_sampler(n_objects)
@@ -61,7 +61,7 @@ class OnFloor(BaseScene):
         # Sample random objects
         n_objects = self._rng.randint(self.min_objects, self.max_objects + 1)
         urdf_paths, scale = self._object_sampler(n_objects)
-        
+
 
         # Spawn objects
         for path in urdf_paths:

@@ -20,7 +20,7 @@ from xarm.x3.code import APIState
 from ruka.robot.force import ForceInfo
 from ruka.robot.realtime import WatchHoundPiped, WatchdogParams, WatchHoundOSPiped
 from ruka.util.reporter import store_live_robot_params
-from ruka.util.x3d import Vec3, conventional_rotation
+from ruka.util.x3d import Vec3, conventional_rotation, tool_to_world
 from ruka_os.globals import WATCHDOG_AGGRESSIVE_REALTIME, USE_VEL_WATCHDOG
 
 
@@ -238,8 +238,10 @@ class _XArm(ArmInfo, ForceInfo, GripperInfo, GripperPosControlled):
     # - ForceInfo  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
     @property
-    def external_force(self) -> List[float]:
-        return self._api.ft_ext_force
+    def external_force(self) -> Vec3:
+        tool_force = np.array(self._api.ft_ext_force[:3]) * np.array([1, -1, 1])
+        world_force, _ = tool_to_world(tool_force, [0] * 3, self.angles)
+        return world_force
 
     # - Misc - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
@@ -489,11 +491,11 @@ class XArmVelOverPosControlled(ArmInfo, GripperInfo, GripperPosControlled, ArmPo
                 max_fail_rate=0.5 if WATCHDOG_AGGRESSIVE_REALTIME else 0,
                 window_in_steps=10 if WATCHDOG_AGGRESSIVE_REALTIME else 0
             ))
-            timer_conn = watchhound.conn       
+            timer_conn = watchhound.conn
             #connections = [timer_conn, conn]
             fn = conn.fileno()
             fds = [timer_conn, conn.fileno()]
-        
+
         pos_control = _XArmPosControlledWithSpeed(config)
         vel = np.zeros((3,))
         angular_vel = np.zeros((3,))
