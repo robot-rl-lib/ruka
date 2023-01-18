@@ -87,7 +87,7 @@ class Watchdog:
         C) If window_in_steps == 0, then a single failed deadline causes an
           exception.
 
-        A deadline is not considered failed if it is failed by more than
+        A deadline is considered NOT failed if it is failed by less than
         grace_period.
         """
         now = time.time()
@@ -235,7 +235,7 @@ class WatchHoundOSPiped(WatchHound):
 
     def action(self):
         os.write(self.w, str.encode('a'))
-        
+
     @property
     def conn(self):
         return self.r

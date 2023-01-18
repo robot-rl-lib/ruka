@@ -3,20 +3,25 @@ import copy
 import cv2
 import fcntl, sys, os
 import numpy as np
+import signal
 import socket
 import struct
 import threading
 import time
 
+import multiprocessing as mp
+
 from .robot import Camera
+from .realtime import Watchdog, WatchdogParams
 from enum import Enum
 from functools import wraps
 from pathlib import Path
 from ruka.util.compression import img2jpg
 from ruka_os.globals import streaming_file_from_id, get_infra_setup, \
                             streaming_sock_from_id, streaming_info_from_file, \
-                            LIVE_STREAMING_TIME_DELTA, DEFAULT_STREAM_JPG_QUALITY
-from typing import Dict, Tuple, Any
+                            LIVE_STREAMING_TIME_DELTA, DEFAULT_STREAM_JPG_QUALITY, \
+                            DEBUG_CAMERA_FPS
+from typing import Dict, Tuple, Any, Optional, Union, Callable
 from v4l2 import *
 
 class FakeRGBDCamera(Camera):
@@ -224,28 +229,47 @@ def visualize_camera(sn_field: str, extract = lambda frame,obj: frame, capture_m
     return decorator
 
 
-class MasterCamera(Camera):
+class ThreadProxyCamera(Camera):
+    """
+    Creates a separate thread and inside captures data from the slave camera
+    In main thread the capture() returns last available frame.
+    Thus, there is almost no delay in calling capture(), which is good.
 
+    slave argument to constructor is the original camera (e.g. Realsense)
+    ThreadProxyCamera is the interface to the threaded slave()
+
+    User code queries `capture()` from ThreadProxyCamera, while slave is working in worker() loop.
+    """
     # keep slave as a class variable
-    def __init__(self, slave):        
+    def __init__(self, slave, fps: Optional[float] = None):
         self.slave = slave
-        self.begin()
+        self.begin(fps)
 
-    def begin(self):
+    def begin(self, fps: Optional[float] = None):
         # MT thread
         self.started = False
         self.closing = False
 
-        # event + lock
+        # if we want proxy camera to simulate the "freeze" behaviour of slave
+        # then we should delay in capture method()
+        self.delay = None if fps is None else 1/fps
+        self.wdog = None
+        if self.delay:
+            self.wdog = Watchdog(WatchdogParams(
+                dt=self.delay,
+                grace_period=self.delay*10,
+                max_fail_time=0,
+                max_fail_rate=0,
+                window_in_steps=0
+            ))
+
+        # lock
         self.pic_lock = threading.Lock()
-        self.pic_updated_event = threading.Event()
-        self.pic_updated_took = threading.Event()
 
         # shared data object so we should lock when reading
         self.last_pic = [[],[]]
         self.cur_pic_index = 0 # index of the actual pic is located
-        self.wants = False
- 
+        
         # create and launch thread
         self.t1 = threading.Thread(target=self.worker)
         self.t1.daemon = True
@@ -257,6 +281,11 @@ class MasterCamera(Camera):
         then copy passed data to local var, which later encoded to JPEG
         and written to our streaming file
         """
+
+        nn = 0
+        start = time.time()
+        camname = type(self.slave).__name__
+
         while not self.closing:
             # camera is freezing in this function
             # to get another frame according to its FPS
@@ -273,14 +302,19 @@ class MasterCamera(Camera):
             self.last_pic[self.cur_pic_index] = pic
             self.pic_lock.release()
 
-    # stop on emregncy when deleting MasterCamera - ouch - never!
+            if DEBUG_CAMERA_FPS:
+                nn += 1
+                if nn % 30 == 0:
+                    b = time.time()
+
+                    print(f'=== FPS of {camname}:', nn/(b-start))
+                    start = b
+                    nn = 1
+
+    # stop on emregncy when deleting ThreadProxyCamera - ouch - never!
     def __del__(self):
         #Carefully stops thread
-        if self.started:
-            self.closing = True
-            self.t1.join()
-            if self.slave:
-                self.slave.stop()
+        self.force_stop()
 
     def force_stop(self):
         if self.started:
@@ -289,13 +323,11 @@ class MasterCamera(Camera):
             if self.slave:
                 self.slave.stop()
 
-    def reload(self, slave):
-        if self.started:
-            self.closing = True
-            self.t1.join()
-            self.slave.stop()
+    # something changed in config - reload the slave
+    def reload(self, slave, fps: Optional[float]):
+        self.force_stop()
         self.slave = slave
-        self.begin()
+        self.begin(fps)
 
     # start only once and keep the slave
     def start(self):
@@ -309,6 +341,11 @@ class MasterCamera(Camera):
         pass
 
     def capture(self):
+        if not (self.wdog is None):
+            wait_time = self.wdog.get_time_to_sleep()
+            time.sleep(wait_time)
+            self.wdog.step()
+        
         while True:
             # get last good frame without waiting capture() to be finished
             self.pic_lock.acquire()
@@ -319,7 +356,6 @@ class MasterCamera(Camera):
             # for the first frame we may got an empty array []
             # so lets sleep a bit and whait while worker fills the data
             # this shoould be a sub fps wait:
-            # TODO: rebuild this later when we get the FPS info
             time.sleep(0.001)
         
         return picdata
@@ -332,30 +368,401 @@ class MasterCamera(Camera):
     def height(self):
         return self.slave.height
 
-instances = {}
-def slaveize_camera(sn_field: str, config_field: str):
-    """
-    Decorator for the camera to slaveize it under master
+# This var is set to True in child proccess, so we donot generate the
+# ProcessProxyCamera decorator again
+IN_SLAVE_SUBPROCESS = False
 
-    Master reads at 30 fps, but slave may be slower!
+class ProcessProxyCamera(Camera):
+    """
+    Creates a separate process which captures data from the real camera, then
+    sends frames back to the caller.
+
+    This class creates a child process, which inside loops forever the original
+    camera (we also call it slave here) for frames.
+
+    The ProcessProxyCamera class is used by the caller to capture() frames.
+    So the flow is the following:
+    1. User calls: ProcessProxyCamera.capture() 
+    2. ProcessProxyCamera sends request for a frame through pipe to child process
+    3. Child process deblocks on arrived request for a frame
+    4. Child process gets last_frame from camera loop
+    5. Child process sends the frame back to ProcessProxyCamera through pipe
+
+    Thus, the ProcessProxyCamera class in the MAIN process doesn't create the
+    original camera (Realsense) object at all! It only proxies queries to child
+    process. The child process creates the Realsense camera in a thread and queries it.
+
+    Here we are using SPAWN instead of FORK for generating new process.
+    This is required because the FORKed process could have issues with opened
+    resources, which causes camera not to start working.
+
+    Here:
+    https://stackoverflow.com/questions/64095876/multiprocessing-fork-vs-spawn
+    it is said that fork is unsafe, which we see here with the camera.
+
+    So let's go with the spawn.
+    """
+    # keep slave as a class variable
+    def __init__(self,
+                 cam_setup: Tuple[str,Any,Any],
+                 fps: Optional[float] = None,
+                 width: Optional[int] = None,
+                 height: Optional[int]=None):
+        self.cam_setup = cam_setup
+        self._width = width
+        self._height = height
+        self.begin(fps)
+
+    def begin(self, fps: Optional[float] = None):
+
+        self.started = False
+
+        self.delay = None if fps is None else 1/fps
+        self.wdog = None
+        if self.delay:
+            self.wdog = Watchdog(WatchdogParams(
+                dt=self.delay,
+                grace_period=self.delay*10,
+                max_fail_time=0,
+                max_fail_rate=0,
+                window_in_steps=0
+            ))
+
+        self._conn, child_conn = mp.Pipe()
+        self._camera_loop_process = mp.get_context('spawn').Process(
+            target=ProcessProxyCamera._forked_camera_loop,
+            args=(child_conn, self.cam_setup)
+            #, daemon=True    cannot do for a spawned process
+        )
+        signal.signal(signal.SIGCHLD, self.child_exited)
+
+        self._camera_loop_process.start()
+        if not self._conn.poll(10):
+            raise RuntimeError('Slave camera in child process not started for 10 secs. Something is dead.')
+        d = self._conn.recv()
+        
+    @staticmethod
+    def child_exited(sig, frame):
+        pass
+
+    @staticmethod
+    def _forked_camera_loop(conn, cam_setup):
+        """
+        We should:
+        1. Create capture loop same was as in ThreadProxyCamera
+        2. Create thread which sends data to caller() using pipe
+        """
+
+        class FrameSender:
+            """
+            Waits command from pipe and:
+            1. Exists if requested
+            2. Sends frame if requested
+            """
+            def __init__(self, pipe, slave):
+                # from main thread
+                self.pipe = pipe
+                self.pic_lock = threading.Lock()
+                self.closing = False
+                self._slave = slave
+
+                # create and launch thread
+                self.t1 = threading.Thread(target=self.worker)
+                self.t1.daemon = True
+               
+                # shared data object so we should lock when reading
+                self.last_pic = [[],[]]
+                self.cur_pic_index = 0 # index of the actual pic is located
+
+            def worker(self):
+                """
+                Waiting for the request from pipe and send back the last captured frame
+                """
+                while self.pipe.poll(None):
+                    d = self.pipe.recv()
+                    if d == 'F':
+                        while True:                    
+                            # get last good frame without waiting capture() to be finished
+                            self.pic_lock.acquire()
+                            picdata = copy.deepcopy(self.last_pic[self.cur_pic_index])
+                            self.pic_lock.release()
+                            if len(picdata)>0:
+                                break
+                            # for the first frame we may got an empty array []
+                            # so lets sleep a bit and whait while worker fills the data
+                            # this shoould be a sub fps wait:
+                            time.sleep(0.001)
+
+                        self.pipe.send(picdata)
+                    if d == 'W':
+                        self.pipe.send(self._slave.width)
+                    if d == 'H':
+                        self.pipe.send(self._slave.height)
+                    if d == 'E':
+                        self.closing = True
+                        break
+
+            def start(self):
+                self.t1.start()
+        
+        # mark that we are in the subprocess
+        global IN_SLAVE_SUBPROCESS
+        IN_SLAVE_SUBPROCESS = True
+        
+        # starting slave camera
+        cname = cam_setup[0]
+        mname = cam_setup[1]
+        cammod = __import__(mname, globals(), locals(), [cname], 0)
+        cls = getattr(cammod, cname)
+        args = cam_setup[2]
+        kwargs = cam_setup[3]
+        slave = cls(*args, **kwargs)
+        slave.start()
+        
+        # starting the thread
+        framer = FrameSender(conn, slave)
+        framer.start()
+
+        nn = 0
+        start = time.time()
+
+        # notify that we have started
+        conn.send('S')
+
+        while not framer.closing:
+            # camera is freezing in this function
+            # to get another frame according to its FPS
+            pic = slave.capture()
+
+            # after we should update the pic storage with changes from step to
+            # step from zero to 1, thus we always have the fresh frame we we 
+            # need it without waiting
+            # this lock potentially may freeze this worker, but only on the time
+            # of deepcopy(), which expected to be faster than the capture() call
+            # above - so this is OKAY!
+            framer.pic_lock.acquire()
+            framer.cur_pic_index = 1 - framer.cur_pic_index
+            framer.last_pic[framer.cur_pic_index] = pic
+            framer.pic_lock.release()
+
+            if DEBUG_CAMERA_FPS:
+                nn += 1
+                if nn % 30 == 0:
+                    b = time.time()
+                    print(f'=== FPS of new process:', nn/(b-start))
+                    start = b
+                    nn = 1
+        conn.send('OK')
+
+    def send_cmd(self, cmd):
+        self._conn.send(cmd)
+
+    # stop on emregncy when deleting ThreadProxyCamera - ouch - never!
+    def __del__(self):
+        self.force_stop()
+
+    def force_stop(self):
+        if self.started:
+            try:
+                self.send_cmd('E')
+                msg = self._conn.recv()
+            except:
+                pass
+            self.started = False
+
+    def reload(self,
+               cam_setup: Tuple[str,Any,Any],
+               fps: Optional[float],
+               width: Optional[int] = None,
+               height: Optional[int] = None):
+        self.force_stop()
+        self.cam_setup = cam_setup
+        self._width = width
+        self._height = height
+        self.begin(fps)
+
+    # start only once and keep the slave
+    def  start(self):
+       if not self.started:
+            self.started = True
+
+    # we do not stop the slave - never
+    def stop(self):
+        pass
+
+    def capture(self):
+        if not self.started:
+            return None
+
+        if not (self.wdog is None):
+            wait_time = self.wdog.get_time_to_sleep()
+            time.sleep(wait_time)
+            self.wdog.step()
+
+        self.send_cmd('F')
+        return self._conn.recv()
+        
+    @property
+    def width(self):
+        if not self._width:
+            self._conn.send('W')
+            self._width = self._conn.recv()
+        return self._width
+
+    @property
+    def height(self):
+        if not self._height:
+            self._conn.send('H')
+            self._height = self._conn.recv()
+        return self._height
+
+
+# ProcessProxyCamera handles the camera in a separate process
+# while the Proxy uses thread
+USE_PROCESS_PROXY_CAMERA = False
+
+
+# --------------------------
+instances = {}
+def slaveize_camera(sn_field: str, config_field: str, fps_field: Optional[Union[str,float]]=None):
+    """
+    Decorator for the camera to slaveize it under proxy.
+
+    Users wants to use the camera as:
+
+    cam = RealsenseCamera(...)
+    cam.start()
+    while(True):
+        frame = cam.capture()
+
+    Our goal to keep this code the same for user, but try to detach camera in a 
+    separate job:
+    1. thread
+    2. process
+
+    So for User, the fact that camera started in a separate thread or process
+    is transparent. That is why we use a DECORATOR.
+
+    The decorator replaces the real camera with its own object.
+
+    WITHOUT DECORATOR:
+
+    cam = RealsenseCamera(...)
+    cam.start()
+    while(True):
+        frame = cam.capture()
+
+
+    WITH DECORATOR:
+
+    slave = RealsenseCamera(...)
+    cam = ThreadProxyCamera(slave)
+    cam.start()
+    while(True):
+        frame = cam.capture()
+
+
+    So with decorator, the user is working with a "virtual camera", which we call
+    ThreadProxyCamera. Inside the Proxy, we create a thread, where the ORIGINAL camera
+    object is working. We call it a slave.
+
+    The slave camera (which is e.g. Realsense) is working on 30fps inside a thread
+    or process. Slave just obtains new frame and store it in a local var (last_frame).
+
+    ThreadProxyCamera objects reads the last stored frame from a loval variable 
+    (last_frame). Thus the ThreadProxyCamera may work on ANY FPS without any 
+    interruption to the Realsense camera flow.
+
+    In this case we may:
+     - easily visualize the Realsense camera in high fps, as it is not linked 
+       to and env()/step() processes.
+     - request frames from ThreadProxyCamera at any fps (slower or higher)
+
+    Glossary:
+      ThreadProxyCamera      - class that is using the THREAD
+      ProcessProxyCamera - class that is using the PROCESS
+
+    The decorator also checks whether the RealsenseCamera was already slavized
+    and do not re-create a new instance. So once we started the slave camera 
+    it works till the end of the python script.
+
+    Arguments:
+    sn_field - field of the slave object where the camera serial number is stored
+    config_field - field name containing the camera config, needed to detect
+                   when we requested new config to reload the detached proxy
+    fps_field - if not set, then the proxy may feed the frames as fast as you request
+                if set as str, this is the field of the slave camera object to read the fps value
+                if set as float, this is the fps directly for the proxy camerafor reading
+                last 2 options mostly used for debug, when we need a loop like this:
+                while True:
+                    cam.capture() <--- expecting here to block
     """
     def decorator(cls):        
         def getinstance(*args, **kwargs):
             global instances
-            cam = cls(*args, **kwargs)
-            sn = getattr(cam, sn_field)
-            config = getattr(cam, config_field)
-            uid = (cls, sn)
-            if uid in instances:
-                if instances[uid]['config'] != config:
-                    instances[uid]['camera'].reload(cam)
-                    instances[uid]['config'] = config
-            if uid not in instances:
-                instances[uid] = {
-                    'config': config,
-                    'camera': MasterCamera(cam)
-                }
-            return instances[uid]['camera']
+
+            if not USE_PROCESS_PROXY_CAMERA:
+                cam = cls(*args, **kwargs)
+                sn = getattr(cam, sn_field)
+                config = getattr(cam, config_field)
+                fps = None
+                if fps_field:
+                    if isinstance(fps_field, str):
+                        fps = getattr(cam, fps_field)
+                    else:
+                        fps = fps_field
+                uid = (cls, sn)
+                if uid in instances:
+                    if instances[uid]['config'] != config:
+                        instances[uid]['camera'].reload(cam, fps)
+                        instances[uid]['config'] = config
+                if uid not in instances:
+                    instances[uid] = {
+                        'config': config,
+                        'camera': ThreadProxyCamera(cam, fps)
+                    }
+                return instances[uid]['camera']
+
+            else:
+                # if we are in slave - just generate the camera object as requested
+                # as this decorator is needed in proxy process only
+                global IN_SLAVE_SUBPROCESS
+                if IN_SLAVE_SUBPROCESS:
+                    return cls(*args, **kwargs)
+
+                if True:
+                    # we create cam object just to get the sn and other config
+                    cam = cls(*args, **kwargs)
+                    sn = getattr(cam, sn_field)
+                    config = getattr(cam, config_field)
+                    fps = None
+                    if fps_field:
+                        if isinstance(fps_field, str):
+                            fps = getattr(cam, fps_field)
+                        else:
+                            fps = fps_field
+                    width = cam.width
+                    height = cam.height
+
+                # this is needed to build camera, we cannot use the local function
+                # or camera object it self as they could not be pickled
+                # pickling is required as we use "SPAWN" instead of "FORK"
+                cname = cls.__name__
+                mname = cls.__module__
+                cam_setup = cname, mname, args, kwargs
+                
+                uid = (cls, sn)
+                if uid in instances:
+                    if instances[uid]['config'] != config:
+                        instances[uid]['camera'].reload(cam_setup, fps, width, height)
+                        instances[uid]['config'] = config
+                if uid not in instances:
+                    instances[uid] = {
+                        'config': config,
+                        'camera': ProcessProxyCamera(cam_setup, fps, width, height)
+                    }
+                return instances[uid]['camera']
+
         return getinstance
     return decorator
 
@@ -393,7 +800,7 @@ class TestCamera(Camera):
         return 720
 
 
-@slaveize_camera('sn', 'config')
+@slaveize_camera('sn', 'config', 30)
 @visualize_camera('sn')
 class MockCamera(Camera):
     def __init__(self, config):
@@ -401,24 +808,42 @@ class MockCamera(Camera):
         self.config = config
 
     def start(self):
-        pass
+        self.fnum = 0
+        self.start_t = time.time()
 
     def stop(self):
         pass
 
     def capture(self) -> np.ndarray:
-        from PIL import Image
-        time.sleep(0.02)
-        return np.array(Image.new('RGB', (300, 300), color = 'red'))
+        from PIL import Image, ImageDraw
+        time.sleep(1/self.config['fps'])
+        
+        img = Image.new('RGB', (self.width, self.height), color = 'black')
+        draw = ImageDraw.Draw(img)
+
+        self.fnum += 1
+        b = time.time()
+        timed = b-self.start_t
+        fps = self.fnum/timed
+        
+        a = "{:10.4f}".format(timed)
+        b = "{:10.4f}".format(fps)
+        
+        draw.text((0, 0),f"Frame {self.fnum}, elasped {a}, fps {b}",(255,255,255))
+                
+        return np.array(img)
 
     @property
     def width(self):
-        return 200
+        return self.config['width']
 
     @property
     def height(self):
-        return 200
+        return self.config['height']
 
+    @property
+    def fps(self):
+        return self.config['fps']
 
 class StreamTo(Enum):
     FILE = 'file'

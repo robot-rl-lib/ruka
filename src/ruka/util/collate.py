@@ -61,7 +61,7 @@ def default_collate_fn2(x: List[T]) -> U:
         )
 
     # T = np.int64 | np.int32 | ...
-    if isinstance(x[0], (np.int64, np.int32)):
+    if isinstance(x[0], (np.int64, np.int32, np.float32, np.float64)):
         assert all(isinstance(i, type(x[0])) for i in x)
         return np.array(x, dtype=type(x[0]))
 

@@ -7,7 +7,8 @@ def crop_augment(obs_batch, to_crop, crop_size):
     if not to_crop:
         return obs_batch
     cropped = {}
-    *bs, h, w, c = obs_batch[to_crop[0]].shape
+    # can not get channel because it can be different
+    *bs, h, w, _ = obs_batch[to_crop[0]].shape
     crop_max = h - crop_size + 1
     n = np.prod(bs)
     w1 = np.random.randint(0, crop_max, n)
@@ -16,6 +17,7 @@ def crop_augment(obs_batch, to_crop, crop_size):
         if k not in to_crop:
             cropped[k] = v
             continue
+        c = v.shape[-1]
         v = v.reshape((n, h, w, c))
         cropped[k] = np.zeros((n, crop_size, crop_size, c))
         for i, (w11, h11) in enumerate(zip(w1, h1)):
