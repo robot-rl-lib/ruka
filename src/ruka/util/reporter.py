@@ -2,6 +2,8 @@ import atexit
 import json
 import glob
 import os
+import pwd
+import grp
 import shutil
 import signal
 import time
@@ -12,6 +14,8 @@ import multiprocessing as mp
 from pathlib import Path
 from ruka_os.globals import ROBOT_REPORT_FILE_TPL, ROBOT_HISTORY_LOG_TPL, \
                             ROBOT_HISTORY_REPORT_ON, ROBOT_HISTORY_REPORT_MAXSIZE_BYTES
+from .portal import open_portal
+from subprocess import run
 from typing import Dict
 
 # get file to report robot params
@@ -50,14 +54,11 @@ def store_live_robot_params(name, data):
         global HistoryReport
         if not HistoryReport:
             HistoryReport = RobotHistoryReporter(name)
-        try:
-            HistoryReport.log(data)
-        except:
-            del HistoryReport
-            HistoryReport = False
+        HistoryReport.log(data)
 
 
 HistoryReport = False
+PORTAL_NAME = 'robot_history'
 
 # get directory of robot historical reports
 def get_robot_history_file(name, num = None):
@@ -68,144 +69,123 @@ def get_robot_history_file(name, num = None):
 
 
 class RobotHistoryReporter:
-
     def __init__(self, name):        
-        self._conn, child_conn = mp.Pipe()
-        #self._reporter_process = mp.get_context('spawn').Process(
-        #    target=RobotHistoryReporter._reporter_loop,
-        #    args=(name, child_conn)
-        #)
-        #self._reporter_process = mp.Process(
-        #    target=RobotHistoryReporter._reporter_loop,
-        #    args=(name, child_conn)
-        #)
-        #self._reporter_process.start()
-        self.t1 = threading.Thread(target=RobotHistoryReporter._reporter_loop,
-            args=[name, child_conn])
-        self.t1.daemon = True 
-        self.t1.start()
+        self._name = name
+        self._portal = None
+        self._last_try = 0
+
+    def _activate_portal(self):
+        if not self._portal and (time.time()-self._last_try > 20):
+            self._portal = open_portal(PORTAL_NAME)
+            if not self._portal:
+                self._last_try = time.time()
+            else:
+                self._last_try = 0
         
     def log(self, data: Dict):
-        pckt = 'L', data
-        self._conn.send(pckt)
+        try:
+            self._activate_portal()
+            if self._portal:
+                self._portal.send({'name': self._name, 'data': data})
+        except:
+            del self._portal
+            self._portal = None
 
-    def stop(self):
-        pckt = 'X', []
-        self._conn.send(pckt)
+
+class HistoryLogger:
+    """
+    Waits command from pipe and:
+    1. Exists if requested
+    2. Sends frame if requested
+    """
+    def __init__(self, name):
+        # from main thread
+        self._name = name
         
-    @staticmethod
-    def child_exited(sig, frame):
-        pass
+        self._curfile = get_robot_history_file(self._name)
+        self._rotation_check = 0
 
-    @staticmethod
-    def _reporter_loop(name, conn):
-        """
-        We should:
-        1. Create capture loop same was as in ThreadProxyCamera
-        2. Create thread which sends data to caller() using pipe
-        """
+        self.fp = None
+        self.open_log_file()
 
-        class HistoryLogger:
-            """
-            Waits command from pipe and:
-            1. Exists if requested
-            2. Sends frame if requested
-            """
-            def __init__(self, name, pipe):
-                # from main thread
-                self.pipe = pipe
-                self._name = name
-                
-                self._curfile = get_robot_history_file(self._name)
-                self._rotation_check = 0
+        self.prev_data = False
 
-                self.fp = None
-                self.open_log_file()
+    def make_log_file(self):
+        if not os.path.isfile(self._curfile):
+            Path(self._curfile).touch()
+            os.chmod(self._curfile, 0o666)
+            uid = pwd.getpwnam("root").pw_uid
+            gid = grp.getgrnam("video").gr_gid
+            os.chown(self._curfile, uid, gid)
+        
+    def open_log_file(self):
+        self.make_log_file()
+        try:
+            self.fp = open(self._curfile, "a")
+        except:
+            self.fp = None
 
-                self.prev_data = False
+    def close_log_file(self):
+        if self.fp:
+            self.fp.close()
 
-            def make_log_file(self):
-                Path(self._curfile).touch()
-                os.chmod(self._curfile, 0o666)
-                
-            def open_log_file(self):
-                self.make_log_file()
-                self.fp = open(self._curfile, "a")
+    def rotate(self):
+        self._rotation_check += 1
+        
+        # not too often check file size
+        if self._rotation_check < 100:
+            return
 
-            def close_log_file(self):
-                if self.fp:
-                    self.fp.close()
+        self._rotation_check = 0
 
-            def rotate(self):
-                self._rotation_check += 1
-                
-                # not too often check file size
-                if self._rotation_check < 100:
-                    return
+        size = os.path.getsize(self._curfile)
+        if size < ROBOT_HISTORY_REPORT_MAXSIZE_BYTES:
+            return 
 
-                self._rotation_check = 0
+        self.close_log_file()
 
-                size = os.path.getsize(self._curfile)
-                if size < ROBOT_HISTORY_REPORT_MAXSIZE_BYTES:
-                    return 
+        # do rotation
+        files = glob.glob(self._curfile + ".*")
+        files.sort(reverse=True)
+        if len(files)>0:
+            name = files[0]
+            d = name.split(self._curfile+'.')
+            if len(d)<2:
+                raise RuntimeError('Wrong file name for reporting')
+            lastnum = int(d[1])
+            lastnum += 1
+            prev = get_robot_history_file(self._name, lastnum)
+            for f in files:
+                os.rename(f,prev)
+                prev = f
 
-                self.close_log_file()
+        lastnum = 1
+        prev = get_robot_history_file(self._name, lastnum)
+        os.rename(self._curfile, prev)
 
-                # do rotation
-                files = glob.glob(self._curfile + ".*")
-                files.sort(reverse=True)
-                if len(files)>0:
-                    name = files[0]
-                    d = name.split(self._curfile+'.')
-                    if len(d)<2:
-                        raise RuntimeError('Wrong file name for reporting')
-                    lastnum = int(d[1])
-                    lastnum += 1
-                    prev = get_robot_history_file(self._name, lastnum)
-                    for f in files:
-                        os.rename(f,prev)
-                        prev = f
 
-                lastnum = 1
-                prev = get_robot_history_file(self._name, lastnum)
-                os.rename(self._curfile, prev)
+        self.open_log_file()
 
-                self.open_log_file()
+    def log(self, data: Dict):
+        if not self.fp:
+            return
 
-            def log(self, data: Dict):
-                self.rotate()
+        self.rotate()
 
-                # if position is the same as previous, dont log it
-                # this will keep log clean, and, as we put timestamp in data,
-                # we may still track that robot was standing same position for
-                # some time
-                sd = json.dumps(data)
-                if sd == self.prev_data:
-                    return
-                self.prev_data = sd
+        # if position is the same as previous, dont log it
+        # this will keep log clean, and, as we put timestamp in data,
+        # we may still track that robot was standing same position for
+        # some time
+        sd = json.dumps(data)
+        if sd == self.prev_data:
+            return
+        self.prev_data = sd
 
-                data['ts'] = time.time()
-                json.dump(data, self.fp)
-                self.fp.write('\n')
-                self.fp.flush()
+        data['ts'] = time.time()
+        json.dump(data, self.fp)
+        self.fp.write('\n')
+        self.fp.flush()
 
-            def loop(self):
-                while self.pipe.poll(None):
-                    cmd,d = self.pipe.recv()
-                    if cmd == 'X':
-                        break
-                    if cmd == 'L':
-                        self.log(d)
-
-        histlogger = HistoryLogger(name, conn)
-        histlogger.loop()
-
-def exit_handler():
-    global HistoryReport
-    if HistoryReport:
-        HistoryReport.stop()
-
-atexit.register(exit_handler)
 
 # get live robot params
 def get_history_robot_data(name, num = None):

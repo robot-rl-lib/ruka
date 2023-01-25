@@ -12,6 +12,7 @@ import math
 import itertools
 from functools import wraps
 from threading import Event
+import warnings
 
 from dataclasses import dataclass
 from xarm.wrapper import XArmAPI
@@ -20,7 +21,7 @@ from xarm.x3.code import APIState
 from ruka.robot.force import ForceInfo
 from ruka.robot.realtime import WatchHoundPiped, WatchdogParams, WatchHoundOSPiped
 from ruka.util.reporter import store_live_robot_params
-from ruka.util.x3d import Vec3, conventional_rotation, tool_to_world
+from ruka.util.x3d import Vec3, conventional_rotation, tool_to_world, compose_matrix_tool, decompose_matrix_tool
 from ruka_os.globals import WATCHDOG_AGGRESSIVE_REALTIME, USE_VEL_WATCHDOG
 
 
@@ -239,7 +240,11 @@ class _XArm(ArmInfo, ForceInfo, GripperInfo, GripperPosControlled):
 
     @property
     def external_force(self) -> Vec3:
-        tool_force = np.array(self._api.ft_ext_force[:3]) * np.array([1, -1, 1])
+        tool_force = np.array(self._api.ft_ext_force[:3]) @ np.array([
+            [0, 1, 0],
+            [-1, 0, 0],
+            [0, 0, 1],
+        ])
         world_force, _ = tool_to_world(tool_force, [0] * 3, self.angles)
         return world_force
 
@@ -387,7 +392,7 @@ class XArmPosControlled(_XArm, ArmPosControlled):
         return (np.sqrt(np.sum(pos_diff ** 2)) < pos_tolerance) and (np.sqrt(np.sum(angle_diff ** 2)) < angles_tolerance)
 
 
-class XArmVelOverPosControlled(ArmInfo, GripperInfo, GripperPosControlled, ArmPosVelControlled):
+class XArmVelOverPosControlled(ArmInfo, GripperInfo, ForceInfo, GripperPosControlled, ArmPosVelControlled):
     def __init__(self, config: XArmConfig, dt: float = 0.04):
         self._conn, child_conn = mp.Pipe()
         self._control_loop_process = mp.Process(
@@ -449,6 +454,10 @@ class XArmVelOverPosControlled(ArmInfo, GripperInfo, GripperPosControlled, ArmPo
     def gripper_pos_limits(self) -> Tuple[float, float]:
         return self._rpc('gripper_pos_limits')
 
+    @property
+    def external_force(self) -> List[float]:
+        return self._rpc('external_force')
+    
     def set_gripper_pos(self, pos: int):
         self._rpc('set_gripper_pos', pos)
 
@@ -460,28 +469,54 @@ class XArmVelOverPosControlled(ArmInfo, GripperInfo, GripperPosControlled, ArmPo
         return res
 
     @staticmethod
-    def _control_loop(config, dt, conn):
+    def _control_loop(config: XArmConfig, dt, conn):
         class _XArmPosControlledWithSpeed(XArmPosControlled):
             def steady(self, control_mode=False):
                 self._api_set_mode(7)
                 self._api_set_state(0)
                 self._accept_move_commands = True
 
-            def set_pos(self, pos: Vec3, angles: Vec3, speed: float):
+            def set_pos(self, pos: Vec3, angles: Vec3, speed: float, wait=False):
                 self.check()
                 if not self._accept_move_commands:
                     return
                 angles = ruka_to_xarm(angles)
                 self._api.set_tcp_jerk(self._config.max_jerk)
+                
+                # workaround:  wait not work at mode=7...
+                if wait==True:
+                    self._api_set_mode(0)
+                    self._api_set_state(0)
+
                 self._api.set_position(
                     x=pos[0], y=pos[1], z=pos[2],
                     roll=angles[0], pitch=angles[1], yaw=angles[2],
-                    speed=speed, is_radian=False, wait=False, mvacc=self._config.max_acc
+                    speed=speed, is_radian=False, wait=wait, mvacc=self._config.max_acc
                 )
+                
+                # workaround: return back to mode 7
+                if wait == True:
+                    self._api_set_mode(7)
+                    self._api_set_state(0)
 
             @property
             def accept_move_commands(self):
                 return self._accept_move_commands
+
+        def q_angle(roll, pitch, yaw):
+            """ rpy to a single angle """
+            roll = roll / 180 * np.pi
+            pitch = pitch / 180 * np.pi
+            yaw = yaw / 180 * np.pi
+            cr = np.cos(roll * 0.5)
+            sr = np.sin(roll * 0.5)
+            cp = np.cos(pitch * 0.5)
+            sp = np.sin(pitch * 0.5)
+            cy = np.cos(yaw * 0.5)
+            sy = np.sin(yaw * 0.5) 
+            w = cr * cp * cy + sr * sp * sy
+            angle = np.arccos(w) * 2
+            return angle / np.pi * 180
 
         if USE_VEL_WATCHDOG:
             watchhound = WatchHoundOSPiped(WatchdogParams(
@@ -503,17 +538,9 @@ class XArmVelOverPosControlled(ArmInfo, GripperInfo, GripperPosControlled, ArmPo
         error = None
         try:
             while True:
-
                 remote_event = False
                 timed_event = False
                 if USE_VEL_WATCHDOG:
-                    # Doesn't work as the Pipe.send() sometimes freeze for 3 secs
-                    #for r in mp.connection.wait(connections):
-                    #    if r is conn:
-                    #        remote_event = True
-                    #   if r is timer_conn:
-                    #        x = timer_conn.recv()
-                    #        timed_event = True
                     reads, _, _ = select.select(fds, [], [])
                     for cn in reads:
                         if cn==fn:
@@ -575,12 +602,14 @@ class XArmVelOverPosControlled(ArmInfo, GripperInfo, GripperPosControlled, ArmPo
                             conn.send(pos_control.gripper_pos)
                         elif action == 'gripper_pos_limits':
                             conn.send(pos_control.gripper_pos_limits)
+                        elif action == 'external_force':
+                            conn.send(pos_control.external_force)
                         elif action == 'set_gripper_pos':
                             pos_control.set_gripper_pos(args[0])
                             conn.send(None)
                         elif action == 'set_pos':
                             pos, angles = args
-                            pos_control.set_pos(pos, angles, config.max_speed)
+                            pos_control.set_pos(pos, angles, config.max_speed, wait=True)
                             conn.send(None)
                         else:
                             conn.send(None)
@@ -591,15 +620,29 @@ class XArmVelOverPosControlled(ArmInfo, GripperInfo, GripperPosControlled, ArmPo
                 # this is watch dog event!
                 if timed_event:
                     if not error and control_mode == ControlMode.VEL and pos_control.accept_move_commands:
-                        speed = np.linalg.norm(vel)
-                        angular_speed = np.linalg.norm(angular_vel)
-                        speed = max(speed, angular_speed)
+
+                        _vel = vel.copy()
+                        _angular_vel = angular_vel.copy()
+                        
+                        a = q_angle(*_angular_vel)
+                        
+                        xyz_norm = np.linalg.norm(_vel)
+                        angle_norm = a / 180 * 1000 # 180 deg/s -> 1000 mm/s
+                        speed = np.linalg.norm([xyz_norm, angle_norm])
+
                         if speed > config.max_speed:
+                            warnings.warn('You might want to set max speed higher!')
                             speed = config.max_speed
+
                         pos = np.array(pos_control.pos)
                         angles = np.array(pos_control.angles)
+
+                        angular_vel_m = compose_matrix_tool(angles=_angular_vel)
+                        angles_m = compose_matrix_tool(angles=angles)
+                        new_angles_m =  angular_vel_m @ angles_m
+                        _, new_angles = decompose_matrix_tool(new_angles_m)
                         try:
-                            pos_control.set_pos(list(pos + vel), list(angles + angular_vel), speed)
+                            pos_control.set_pos(list(pos + vel), list(new_angles), speed)
                         except RobotError as e:
                             error = e
 

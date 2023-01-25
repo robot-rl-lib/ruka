@@ -3,9 +3,10 @@ import cv2
 import gym
 import time
 import numpy as np
-from typing import Tuple, List
+from typing import Optional, Tuple, List
 from dataclasses import dataclass
 
+from ruka.robot.force import ForceInfo
 from ruka.robot.env import RobotEnv
 from ruka.observation import Observe, Observation
 from ruka.robot.robot import Camera, ControlMode, ArmInfo, GripperInfo, Robot
@@ -28,12 +29,14 @@ class VelocityControlRobotEnv(RobotEnv):
             gripper_open_position: float,
             gripper_close_position: float,
             dt: float,
+            force_info: Optional[ForceInfo] = None,
             observation_types: List[Observe] = list((Observe.DEPTH,))):
         self.robot = robot
         self.arm_info= arm_info
         self.camera = camera
         self.action_controller = action_controller
         self.gripper_info = gripper_info
+        self.force_info = force_info
 
         self.gripper_open_position = gripper_open_position
         self.gripper_close_position = gripper_close_position
@@ -88,12 +91,12 @@ class VelocityControlRobotEnv(RobotEnv):
 
         # keep requested control loop rate
         if USE_ENV_WATCHDOG:
-            stime = self._watchdog.get_time_to_sleep()            
+            stime = self._watchdog.get_time_to_sleep()
             #t= time.time()
             #print('ROUNDTRP TIME', "{:10.4f}".format(t-self.RTIME),'TIME NOW: ', "{:10.4f}".format(time.time()), '  TILL DEADLINE', "{:10.4f}".format(stime))
             time.sleep(stime)
             self._watchdog.step()
-        
+
         return self.get_observation()
 
     @property
@@ -128,6 +131,8 @@ class VelocityControlRobotEnv(RobotEnv):
             observation_space[Observe.GRIPPER.value] = gym.spaces.Box(low=-1, high=1, shape=(1,))
         if Observe.GRIPPER_OPEN in self._observation_types:
             observation_space[Observe.GRIPPER_OPEN.value] = gym.spaces.Box(low=0, high=1, shape=(1,))
+        if Observe.EXTERNAL_FORCE in self._observation_types:
+            observation_space[Observe.EXTERNAL_FORCE.value] = gym.spaces.Box(low=float('-inf'), high=float('+inf'), shape=(3,))
 
         return observation_space
 
@@ -154,7 +159,7 @@ class VelocityControlRobotEnv(RobotEnv):
         frame = self.camera.capture()
         if not USE_ENV_WATCHDOG:
             self._observation_ts = time.time()
-        
+
         rgb = frame[:,:, :3]
         depth = frame[:,:,3][:,:,None]
 
@@ -162,7 +167,7 @@ class VelocityControlRobotEnv(RobotEnv):
         x, y, z = self.arm_info.pos
         roll, pitch, yaw = self.arm_info.angles
         gripper = self.gripper_info.gripper_pos
-        
+
         obs = Observation()
 
         if Observe.RGB in self._observation_types:
@@ -177,7 +182,8 @@ class VelocityControlRobotEnv(RobotEnv):
             obs[Observe.GRIPPER.value] = np.array([gripper], dtype=np.float32)
         if Observe.GRIPPER_OPEN in self._observation_types:
             obs[Observe.GRIPPER_OPEN.value] = np.array([self._gripper_open], dtype=np.uint8)
-
+        if Observe.EXTERNAL_FORCE in self._observation_types and self.force_info:
+            obs[Observe.EXTERNAL_FORCE.value] = np.array(self.force_info.external_force, dtype=np.float32)
         return obs
 
     def go_to_random(self, x_min, x_max, y_min, y_max, yaw_min=None, yaw_max=None):
