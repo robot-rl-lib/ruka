@@ -888,6 +888,7 @@ def get_image_streamer(config: Dict, cls: Any = False):
     data_transfer = False
     resize = False
     quality = DEFAULT_STREAM_JPG_QUALITY
+    draw_on_frame = None
     if config.get('clone_from'):
         if config.get('clone_from').get('data_transfer'):
             data_transfer = config.get('clone_from').get('data_transfer')
@@ -898,15 +899,19 @@ def get_image_streamer(config: Dict, cls: Any = False):
             resize = config.get('clone_from').get('resize')
         if config.get('clone_from').get('quality'):
             quality = config.get('clone_from').get('quality')
+        if config.get('clone_from').get('draw_on_frame'):
+            draw_on_frame = config.get('clone_from').get('draw_on_frame')
+            if not callable(draw_on_frame):
+                raise ValueError('draw_on_frame field is not callable')
     
     sid = f'{stype}-{id}'
     if streamers.get(sid):
         return streamers.get(sid)
 
     if stype == StreamTo.FILE:
-        streamers[sid] = StreamImagesToFile(id, data_transfer=data_transfer, resize=resize, quality=quality)
+        streamers[sid] = StreamImagesToFile(id, data_transfer=data_transfer, resize=resize, quality=quality, draw_on_frame=draw_on_frame)
     elif stype == StreamTo.SOCK:
-        streamers[sid] = StreamImagesToSocket(id, data_transfer=data_transfer, resize=resize, quality=quality)
+        streamers[sid] = StreamImagesToSocket(id, data_transfer=data_transfer, resize=resize, quality=quality, draw_on_frame=draw_on_frame)
     else:
         raise NotImplementedError()
 
@@ -918,7 +923,7 @@ class StreamImagesTo():
     Send image to file and not wasting too much time from main thread
     when encoding and writing JPG
     """
-    def __init__(self, data_transfer = False, resize = False, quality = 95):
+    def __init__(self, data_transfer = False, resize = False, quality = 95, draw_on_frame: Optional[Callable] = None):
         """
         Initilize our thread for writing frames to a streaming engine
         """
@@ -952,7 +957,9 @@ class StreamImagesTo():
                 raise ValueError('Resize for stream is wrong: height not set')
             self.resize = resize
         self.quality = quality
-    
+
+        self.draw_on_frame = draw_on_frame
+
     def __del__(self):
         """
         Carefully stops thread
@@ -1002,6 +1009,9 @@ class StreamImagesTo():
 
             if self.data_transfer:
                 pic_data = self.inject_data(pic_data)
+
+            if self.draw_on_frame is not None:
+                pic_data = self.draw_on_frame(pic_data)
                 
             self.stream_image(pic_data)
 
@@ -1083,7 +1093,7 @@ class StreamImagesToFile(StreamImagesTo):
     when encoding and writing JPG
     """
     def __init__(self, fileid: int, data_transfer = False, resize = False,
-                 quality = 95, use_cv2 : bool = False):
+                 quality = 95, use_cv2 : bool = False, draw_on_frame: Optional[Callable] = None):
         """
         Initilize our thread for writing frames to a streaming file
 
@@ -1091,7 +1101,7 @@ class StreamImagesToFile(StreamImagesTo):
         defined in streaming_file_from_id(fileid)
         """
         self.file = streaming_file_from_id(fileid)
-        super().__init__(data_transfer=data_transfer, resize=resize, quality=quality)        
+        super().__init__(data_transfer=data_transfer, resize=resize, quality=quality, draw_on_frame=draw_on_frame)        
         self.use_cv2 = use_cv2
 
     def stream_image(self, pic_data):
@@ -1110,7 +1120,7 @@ class StreamImagesToSocket(StreamImagesTo):
     Send image to file and not wasting too much time from main thread
     when encoding and writing JPG
     """
-    def __init__(self, sockid: int, data_transfer = False, resize = False, quality=95):
+    def __init__(self, sockid: int, data_transfer = False, resize = False, quality=95, draw_on_frame: Optional[Callable] = None):
         """
         Initilize our thread for writing frames to a streaming socket
 
@@ -1118,7 +1128,7 @@ class StreamImagesToSocket(StreamImagesTo):
         defined in streaming_sock_from_id(sockid)
         """
         self.sock_file = streaming_sock_from_id(sockid)
-        super().__init__(data_transfer=data_transfer, resize=resize, quality=quality)
+        super().__init__(data_transfer=data_transfer, resize=resize, quality=quality, draw_on_frame=draw_on_frame)
         self.sock = False
 
     def __del__():
